@@ -14,7 +14,6 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     
-    # --- ADDED TO FIX THE WARNING ---
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
@@ -23,11 +22,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Set up Python
+      # 2. Set up Python (Upgraded from 3.9 to 3.12 for Ubuntu 26.04)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.12'
           
       - name: Install Python Dependencies
         run: pip install pandas pandas_datareader requests
@@ -48,7 +47,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24 # <-- CHANGED FROM 20 TO 24
+          node-version: 24
 
       - name: Install NPM Packages
         run: npm install
