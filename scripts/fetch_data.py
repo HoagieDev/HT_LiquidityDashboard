@@ -147,11 +147,11 @@ def main():
     # Option 1 Multi-Source Weighted Average:
     # 20% Official CPI + 25% Sticky CPI + 25% Case-Shiller Housing + 15% Wholesale PPI + 15% 5Y Breakeven
     merged_df['Composite_Inflation'] = (
-        (0.20 * merged_df['Official_CPI_YoY']) +
+        (0.10 * merged_df['Official_CPI_YoY']) +
         (0.25 * merged_df['Sticky_CPI_YoY']) +
-        (0.25 * merged_df['Housing_YoY']) +
-        (0.15 * merged_df['PPI_YoY']) +
-        (0.15 * merged_df['Breakeven_5Y'])
+        (0.20 * merged_df['Housing_YoY']) +
+        (0.25 * merged_df['PPI_YoY']) +
+        (0.20 * merged_df['Breakeven_5Y'])
     )
 
     # Filter back to START_DATE ('2023-01-01') now that 1-year lookbacks are complete
