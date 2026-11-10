@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 
 // --- UTILS ---
@@ -10,18 +10,35 @@ const formatCurrencyAxis = (value) => {
   return `$${value}M`; // Millions
 };
 
+const formatPercentAxis = (value) => `${Number(value).toFixed(1)}%`;
+
 const formatTooltipValue = (value) => {
-  return new Intl.NumberFormat('en-US').format(value);
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value);
 };
 
 // --- CHART COMPONENT ---
-const DashboardChart = ({ title, data, color, height = '350px' }) => {
+const DashboardChart = ({ 
+  title, 
+  data, 
+  color, 
+  height = '350px', 
+  isPercent = false,
+  primaryName = 'Value',
+  secondaryKey = null,
+  secondaryColor = '#8b949e',
+  secondaryName = 'Official CPI'
+}) => {
   if (!data || data.length === 0) return null;
   
-  const values = data.map(d => parseFloat(d.value));
+  const values = data.flatMap(d => {
+    const v1 = parseFloat(d.value);
+    const v2 = secondaryKey && d[secondaryKey] !== undefined ? parseFloat(d[secondaryKey]) : v1;
+    return [v1, v2];
+  }).filter(v => !isNaN(v));
+
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const padding = (max - min) * 0.05;
+  const padding = (max - min) * 0.05 || 1;
   const showDots = data.length < 60;
 
   return (
@@ -56,29 +73,46 @@ const DashboardChart = ({ title, data, color, height = '350px' }) => {
               domain={[min - padding, max + padding]} 
               stroke="#8b949e"
               tick={{fill: '#8b949e', fontSize: 11}} 
-              width={45}
-              tickFormatter={formatCurrencyAxis} 
+              width={50}
+              tickFormatter={isPercent ? formatPercentAxis : formatCurrencyAxis} 
             />
             <Tooltip 
               contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#fff' }}
-              itemStyle={{ color: color }}
               labelFormatter={(label) => {
                  const date = new Date(label);
                  const userTimezoneOffset = date.getTimezoneOffset() * 60000;
                  const adjustedDate = new Date(date.getTime() + userTimezoneOffset);
                  return adjustedDate.toLocaleDateString();
               }}
-              formatter={(value) => [`$${formatTooltipValue(value)}`, "Amount (Millions)"]}
+              formatter={(value, name) => {
+                if (isPercent) return [`${Number(value).toFixed(2)}%`, name];
+                return [`$${formatTooltipValue(value)}`, "Amount (Millions)"];
+              }}
             />
+            {secondaryKey && <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />}
             <Line 
               type="monotone" 
               dataKey="value" 
+              name={primaryName}
               stroke={color} 
               strokeWidth={2} 
               dot={showDots ? { r: 4, fill: color, stroke: '#000000', strokeWidth: 2 } : false}
               activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }}
               isAnimationActive={false}
             />
+            {secondaryKey && (
+              <Line 
+                type="monotone" 
+                dataKey={secondaryKey} 
+                name={secondaryName}
+                stroke={secondaryColor} 
+                strokeWidth={2} 
+                strokeDasharray="4 4"
+                dot={false}
+                activeDot={{ r: 5, stroke: '#fff', strokeWidth: 1 }}
+                isAnimationActive={false}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -103,7 +137,7 @@ const App = () => {
     fetch('./data.json')
       .then(res => res.json())
       .then(rawData => {
-        const format = (arr) => arr.map(item => ({ date: item.date || item[0], value: item.value || item[1] }));
+        const format = (arr) => arr ? arr.map(item => ({ date: item.date || item[0], value: item.value || item[1] })) : [];
         
         if (rawData[0] && rawData[0].meta) {
             setMeta(rawData[0].meta);
@@ -115,11 +149,15 @@ const App = () => {
             // NEW SCRIPT FORMAT
             setFullData({
                 formula1: rawData.map(d => ({ date: d.date, value: d.Net_Liquidity })),
+                realLiquidity: rawData.map(d => ({ date: d.date, value: d.Real_Net_Liquidity })),
+                compositeInflation: rawData.map(d => ({ 
+                  date: d.date, 
+                  value: d.Composite_Inflation,
+                  officialCpi: d.Official_CPI_YoY 
+                })),
                 fedAssets: rawData.map(d => ({ date: d.date, value: d.Fed_Assets })),
                 tga: rawData.map(d => ({ date: d.date, value: d.TGA_Daily })),
                 rrp: rawData.map(d => ({ date: d.date, value: d.RRP * 1000 })), 
-                // --- THE FIX IS HERE ---
-                // We now correctly map these fields from the JSON
                 loansFacilities: rawData.map(d => ({ date: d.date, value: d.Liquidity_Facilities })), 
                 loansHeld: rawData.map(d => ({ date: d.date, value: d.Loans_Held })),
             });
@@ -130,6 +168,8 @@ const App = () => {
             // OLD LEGACY FORMAT (Just in case)
             setFullData({
                 formula1: format(rawData.formula_1),
+                realLiquidity: format(rawData.real_formula_1),
+                compositeInflation: format(rawData.composite_inflation),
                 fedAssets: format(rawData.fed_assets),
                 tga: format(rawData.tga),
                 rrp: format(rawData.rrp),
@@ -172,6 +212,8 @@ const App = () => {
 
     setFilteredData({
       formula1: filter(fullData.formula1),
+      realLiquidity: filter(fullData.realLiquidity),
+      compositeInflation: filter(fullData.compositeInflation),
       fedAssets: filter(fullData.fedAssets),
       tga: filter(fullData.tga),
       rrp: filter(fullData.rrp),
@@ -228,10 +270,10 @@ const App = () => {
           gap: '20px'
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '22px' }}>Net Fed Liquidity</h1>
+            <h1 style={{ margin: 0, fontSize: '22px' }}>Net Fed Liquidity & True Inflation</h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginTop: '5px' }}>
               <p style={{ color: '#8b949e', margin: 0, fontSize: '13px' }}>
-                Formula #1: Assets - TGA - RRP + Loans
+                Formula #1: Assets - TGA - RRP + Loans • Composite Inflation: CPI, Sticky CPI, Case-Shiller, PPI, 5Y Breakeven
               </p>
               {meta?.last_updated && (
                 <span style={{ 
@@ -293,7 +335,18 @@ const App = () => {
           gap: '20px' 
         }}>
           
-          <DashboardChart title="Formula #1 (Net Liquidity)" data={filteredData.formula1} color="#a371f7" />
+          <DashboardChart title="Formula #1 (Nominal Net Liquidity)" data={filteredData.formula1} color="#a371f7" />
+          <DashboardChart title="Real Net Liquidity (Inflation-Adjusted to Jan 2023 $)" data={filteredData.realLiquidity} color="#39d353" />
+          <DashboardChart 
+            title="Hoagie Composite Inflation vs. Official CPI (YoY %)" 
+            data={filteredData.compositeInflation} 
+            color="#ff7b72" 
+            isPercent={true}
+            primaryName="Composite Inflation"
+            secondaryKey="officialCpi"
+            secondaryColor="#8b949e"
+            secondaryName="Official CPI-U"
+          />
           <DashboardChart title="Treasury General Account (TGA)" data={filteredData.tga} color="#3fb950" />
           <DashboardChart title="Total Assets (WALCL)" data={filteredData.fedAssets} color="#f85149" />
           <DashboardChart title="Reverse Repo (RRP)" data={filteredData.rrp} color="#f0883e" />
