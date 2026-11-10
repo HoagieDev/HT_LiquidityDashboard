@@ -478,11 +478,11 @@ const App = () => {
                     Multi-Source Weighted Average (5 FRED Data Feeds):
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
-                    <div>• <strong style={{ color: '#ff7b72' }}>20% Official CPI-U (CPIAUCSL):</strong> Standard baseline Year-over-Year urban consumer price basket.</div>
+                    <div>• <strong style={{ color: '#ff7b72' }}>10% Official CPI-U (CPIAUCSL):</strong> Standard baseline Year-over-Year urban consumer price basket.</div>
                     <div>• <strong style={{ color: '#ff7b72' }}>25% Sticky-Price CPI (CORESTICKM159SFRBATL):</strong> Atlanta Fed measure tracking slow-changing, permanent service costs (insurance, medical, rent, dining).</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>25% Case-Shiller Home Prices (CSUSHPINSA):</strong> Tracks actual U.S. national home price YoY appreciation instead of lagging Owners' Equivalent Rent surveys.</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>15% Wholesale PPI (PPIACO):</strong> Producer Price Index for All Commodities, capturing upstream supply-chain inflation before it hits retail shelves.</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>15% 5Y Breakeven Inflation (T5YIE):</strong> Real-time daily bond market inflation expectations derived from 5-Year Treasury vs. TIPS yields.</div>
+                    <div>• <strong style={{ color: '#ff7b72' }}>20% Case-Shiller Home Prices (CSUSHPINSA):</strong> Tracks actual U.S. national home price YoY appreciation instead of lagging Owners' Equivalent Rent surveys.</div>
+                    <div>• <strong style={{ color: '#ff7b72' }}>25% Wholesale PPI (PPIACO):</strong> Producer Price Index for All Commodities, capturing upstream supply-chain inflation before it hits retail shelves.</div>
+                    <div>• <strong style={{ color: '#ff7b72' }}>20% 5Y Breakeven Inflation (T5YIE):</strong> Real-time daily bond market inflation expectations derived from 5-Year Treasury vs. TIPS yields.</div>
                   </div>
                 </div>
               }
