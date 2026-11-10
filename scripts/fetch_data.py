@@ -6,6 +6,7 @@ import sys
 
 # --- CONFIGURATION ---
 START_DATE = '2023-01-01'
+FRED_START_DATE = '2022-01-01' # 1-year lookback so YoY % is ready on 2023-01-01
 TODAY = datetime.datetime.today().strftime('%Y-%m-%d')
 
 def fetch_treasury_tga():
@@ -70,16 +71,23 @@ def fetch_treasury_tga():
         return pd.DataFrame()
 
 def fetch_fred_data():
-    """Fetches WALCL, RRP, Loans, and Backup TGA from FRED ONE BY ONE to prevent crashes."""
-    print("Fetching FRED Data (Assets, RRP, Loans)...")
+    """Fetches Liquidity and Inflation series from FRED ONE BY ONE to prevent crashes."""
+    print("Fetching FRED Data (Liquidity + Composite Inflation)...")
     
     # Dictionary of FRED codes and our internal names
     series_dict = {
+        # Liquidity Series
         'WALCL': 'Fed_Assets', 
         'RRPONTSYD': 'RRP',
         'WDTGAL': 'TGA_Weekly',
         'H41RESPPALDKNWW': 'Liquidity_Facilities',
-        'WLCFLL': 'Loans_Held'
+        'WLCFLL': 'Loans_Held',
+        # Composite Inflation Series (Option 1)
+        'CPIAUCSL': 'CPI_Index',
+        'CORESTICKM159SFRBATL': 'Sticky_CPI_YoY',
+        'CSUSHPINSA': 'Case_Shiller_Index',
+        'PPIACO': 'PPI_Index',
+        'T5YIE': 'Breakeven_5Y'
     }
     
     combined_df = pd.DataFrame()
@@ -88,7 +96,7 @@ def fetch_fred_data():
     for fred_code, new_name in series_dict.items():
         try:
             print(f"Fetching {fred_code} ({new_name})...")
-            df = web.DataReader(fred_code, 'fred', START_DATE, TODAY)
+            df = web.DataReader(fred_code, 'fred', FRED_START_DATE, TODAY)
             df = df.rename(columns={fred_code: new_name})
             
             if combined_df.empty:
@@ -118,20 +126,38 @@ def main():
         print("CRITICAL: No FRED data found at all. Exiting.")
         sys.exit(1)
 
-    # 2. Merge Data
+    # 2. Merge Data & Resample to Daily ('D') so 365-day YoY math is exact
     if not tga_df.empty:
         merged_df = fred_df.join(tga_df, how='outer')
-        merged_df['Final_TGA'] = merged_df['TGA_Daily']
-        merged_df['Final_TGA'] = merged_df['Final_TGA'].ffill()
+        merged_df = merged_df.resample('D').mean()
+        merged_df['Final_TGA'] = merged_df['TGA_Daily'].ffill()
     else:
         print("WARNING: Using Weekly TGA (FRED) as fallback.")
-        merged_df = fred_df.copy()
-        merged_df['Final_TGA'] = merged_df['TGA_Weekly'] * 1000
+        merged_df = fred_df.resample('D').mean()
+        merged_df['Final_TGA'] = (merged_df['TGA_Weekly'] * 1000).ffill()
 
-    # 3. Fill Missing Values (Bulletproof approach: forward fill, then backward fill)
+    # 3. Fill Missing Values (Forward fill, then backward fill)
     merged_df = merged_df.ffill().bfill()
 
-    # 4. Calculate Net Liquidity (Formula 1)
+    # 4. Calculate Composite Inflation (YoY %) on full lookback before slicing to START_DATE
+    merged_df['Official_CPI_YoY'] = merged_df['CPI_Index'].pct_change(365) * 100
+    merged_df['Housing_YoY'] = merged_df['Case_Shiller_Index'].pct_change(365) * 100
+    merged_df['PPI_YoY'] = merged_df['PPI_Index'].pct_change(365) * 100
+
+    # Option 1 Multi-Source Weighted Average:
+    # 20% Official CPI + 25% Sticky CPI + 25% Case-Shiller Housing + 15% Wholesale PPI + 15% 5Y Breakeven
+    merged_df['Composite_Inflation'] = (
+        (0.20 * merged_df['Official_CPI_YoY']) +
+        (0.25 * merged_df['Sticky_CPI_YoY']) +
+        (0.25 * merged_df['Housing_YoY']) +
+        (0.15 * merged_df['PPI_YoY']) +
+        (0.15 * merged_df['Breakeven_5Y'])
+    )
+
+    # Filter back to START_DATE ('2023-01-01') now that 1-year lookbacks are complete
+    merged_df = merged_df.loc[START_DATE:].copy()
+
+    # 5. Calculate Net Liquidity (Formula 1 - in Millions)
     merged_df['Net_Liquidity'] = (
         merged_df['Fed_Assets'] 
         - merged_df['Final_TGA'] 
@@ -139,8 +165,13 @@ def main():
         + merged_df['Liquidity_Facilities'] 
         + merged_df['Loans_Held']
     )
+
+    # 6. Calculate Real (Inflation-Adjusted) Net Liquidity (Base = Jan 1, 2023 Dollars)
+    daily_inflation_rate = (merged_df['Composite_Inflation'] / 100) / 365.0
+    merged_df['Custom_Deflator'] = (1 + daily_inflation_rate).cumprod()
+    merged_df['Real_Net_Liquidity'] = merged_df['Net_Liquidity'] / merged_df['Custom_Deflator']
     
-    # 5. Format and Save
+    # 7. Format and Save
     merged_df.index.name = 'date'
     final_df = merged_df.reset_index()
     final_df['date'] = final_df['date'].dt.strftime('%Y-%m-%d')
@@ -148,12 +179,15 @@ def main():
     output_df = final_df[[
         'date', 
         'Net_Liquidity', 
+        'Real_Net_Liquidity',
+        'Composite_Inflation',
+        'Official_CPI_YoY',
         'Fed_Assets', 
         'RRP', 
         'Final_TGA', 
         'Liquidity_Facilities', 
         'Loans_Held'
-    ]]
+    ]].round(2)
     
     output_df = output_df.rename(columns={'Final_TGA': 'TGA_Daily'})
     
