@@ -215,7 +215,6 @@ const App = () => {
         if (Array.isArray(rawData)) {
             setFullData({
                 formula1: rawData.map(d => ({ date: d.date, value: d.Net_Liquidity })),
-                realLiquidity: rawData.map(d => ({ date: d.date, value: d.Real_Net_Liquidity })),
                 compositeInflation: rawData.map(d => ({ 
                   date: d.date, 
                   value: d.Composite_Inflation,
@@ -234,7 +233,6 @@ const App = () => {
             // OLD LEGACY FORMAT
             setFullData({
                 formula1: format(rawData.formula_1),
-                realLiquidity: format(rawData.real_formula_1),
                 compositeInflation: format(rawData.composite_inflation),
                 fedAssets: format(rawData.fed_assets),
                 tga: format(rawData.tga),
@@ -278,7 +276,6 @@ const App = () => {
 
     setFilteredData({
       formula1: filter(fullData.formula1),
-      realLiquidity: filter(fullData.realLiquidity),
       compositeInflation: filter(fullData.compositeInflation),
       fedAssets: filter(fullData.fedAssets),
       tga: filter(fullData.tga),
@@ -441,12 +438,6 @@ const App = () => {
                 </strong>
                 Not all money on the Federal Reserve's balance sheet is actively circulating in financial markets. When the U.S. Treasury builds up cash in its checking account (<strong>TGA</strong>) or when money market funds park cash overnight at the Fed (<strong>RRP</strong>), that liquidity is <em>drained</em> from the banking system. Conversely, when the Fed expands its Total Assets (<strong>WALCL</strong>) or issues emergency bank loans, liquidity is <em>injected</em> into markets.
               </div>
-              <div style={{ backgroundColor: '#0d1117', padding: '15px', borderRadius: '6px', border: '1px solid #30363d' }}>
-                <strong style={{ color: '#39d353', display: 'block', marginBottom: '6px' }}>
-                  3. Nominal vs. Real (Inflation-Adjusted) Liquidity
-                </strong>
-                A $6 Trillion liquidity pool today does not have the same purchasing power as $6 Trillion in January 2023. By compounding our daily Composite Inflation rate into a cumulative deflator index (Base = Jan 1, 2023), we divide Nominal Net Liquidity by the deflator to reveal <strong>Real Net Liquidity</strong>—the true inflation-adjusted fuel available to risk assets.
-              </div>
             </div>
           </div>
         )}
@@ -491,33 +482,19 @@ const App = () => {
 
           {/* CHART 2: Nominal Net Liquidity */}
           <DashboardChart 
-            title="Formula #1: Nominal Net Fed Liquidity" 
+            title="Formula #1 (Net Liquidity)" 
             data={filteredData.formula1} 
             color="#a371f7" 
             formulaBadge="Formula: WALCL - TGA - RRP + Liquidity Facilities + Loans Held"
             explanation={
               <div>
-                <strong>What it measures:</strong> The actual dollar amount of spendable liquidity available in the financial system (in Millions).<br/>
+                <strong>What it measures:</strong> The directional flow of spendable liquidity available in the financial system (in Millions).<br/>
                 <strong>How it’s calculated:</strong> Starts with Total Fed Assets (<code>WALCL</code>), subtracts cash locked up in the Treasury General Account (<code>TGA</code>) and Overnight Reverse Repo facility (<code>RRP</code>), and adds back active Fed lending (<code>H41RESPPALDKNWW</code> + <code>WLCFLL</code>). Rising net liquidity generally supports risk assets.
               </div>
             }
           />
 
-          {/* CHART 3: Real (Inflation-Adjusted) Net Liquidity */}
-          <DashboardChart 
-            title="Real Net Liquidity (Inflation-Adjusted to Jan 2023 $)" 
-            data={filteredData.realLiquidity} 
-            color="#39d353" 
-            formulaBadge="Formula: Nominal Net Liquidity ÷ Cumulative Composite Deflator Index"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> Net Fed Liquidity adjusted for cumulative purchasing-power loss since January 1, 2023.<br/>
-                <strong>How it’s calculated:</strong> Converts the annual <em>Hoagie Composite Inflation Rate</em> into a daily compounding deflator index (Jan 1, 2023 = 1.00). Dividing Nominal Net Liquidity by this deflator shows whether Fed liquidity is growing faster or slower than real-world inflation.
-              </div>
-            }
-          />
-
-          {/* CHART 4: TGA */}
+          {/* CHART 3: TGA */}
           <DashboardChart 
             title="Treasury General Account (TGA)" 
             data={filteredData.tga} 
@@ -531,7 +508,7 @@ const App = () => {
             }
           />
 
-          {/* CHART 5: Total Assets (WALCL) */}
+          {/* CHART 4: Total Assets (WALCL) */}
           <DashboardChart 
             title="Fed Total Assets (WALCL)" 
             data={filteredData.fedAssets} 
@@ -545,7 +522,7 @@ const App = () => {
             }
           />
 
-          {/* CHART 6: Reverse Repo (RRP) */}
+          {/* CHART 5: Reverse Repo (RRP) */}
           <DashboardChart 
             title="Overnight Reverse Repo (RRP)" 
             data={filteredData.rrp} 
@@ -559,7 +536,7 @@ const App = () => {
             }
           />
 
-          {/* CHART 7: Liquidity Facilities */}
+          {/* CHART 6: Liquidity Facilities */}
           <DashboardChart 
             title="Liquidity & Credit Facilities (H41RESPPALDKNWW)" 
             data={filteredData.loansFacilities} 
@@ -573,7 +550,7 @@ const App = () => {
             }
           />
 
-          {/* CHART 8: Loans Held */}
+          {/* CHART 7: Loans Held */}
           <DashboardChart 
             title="Loans Held by the Federal Reserve (WLCFLL)" 
             data={filteredData.loansHeld} 
