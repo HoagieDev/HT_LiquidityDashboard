@@ -17,7 +17,6 @@ def fetch_treasury_tga():
     """
     base_url = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance"
     
-    # FETCH BOTH COLUMNS
     params = {
         'fields': 'record_date,account_type,open_today_bal,close_today_bal',
         'filter': f'record_date:gte:{START_DATE}', 
@@ -74,7 +73,6 @@ def fetch_fred_data():
     """Fetches Liquidity and Inflation series from FRED ONE BY ONE to prevent crashes."""
     print("Fetching FRED Data (Liquidity + Composite Inflation)...")
     
-    # Dictionary of FRED codes and our internal names
     series_dict = {
         # Liquidity Series
         'WALCL': 'Fed_Assets', 
@@ -82,7 +80,7 @@ def fetch_fred_data():
         'WDTGAL': 'TGA_Weekly',
         'H41RESPPALDKNWW': 'Liquidity_Facilities',
         'WLCFLL': 'Loans_Held',
-        # Composite Inflation Series (Option 1)
+        # Composite Inflation Series
         'CPIAUCSL': 'CPI_Index',
         'CORESTICKM159SFRBATL': 'Sticky_CPI_YoY',
         'CSUSHPINSA': 'Case_Shiller_Index',
@@ -92,7 +90,6 @@ def fetch_fred_data():
     
     combined_df = pd.DataFrame()
     
-    # Fetch each series one by one instead of all at once
     for fred_code, new_name in series_dict.items():
         try:
             print(f"Fetching {fred_code} ({new_name})...")
@@ -104,12 +101,11 @@ def fetch_fred_data():
             else:
                 combined_df = combined_df.join(df, how='outer')
         except Exception as e:
-            print(f"WARNING: Could not fetch {fred_code}. It may be discontinued or unavailable. Error: {e}")
+            print(f"WARNING: Could not fetch {fred_code}. Error: {e}")
             
     if combined_df.empty:
         return pd.DataFrame()
         
-    # If a facility was discontinued (fetch failed), fill it with 0 so the math doesn't break
     for new_name in series_dict.values():
         if new_name not in combined_df.columns:
             print(f"Setting missing data column '{new_name}' to 0.")
@@ -136,7 +132,7 @@ def main():
         merged_df = fred_df.resample('D').mean()
         merged_df['Final_TGA'] = (merged_df['TGA_Weekly'] * 1000).ffill()
 
-    # 3. Fill Missing Values (Forward fill, then backward fill)
+    # 3. Fill Missing Values
     merged_df = merged_df.ffill().bfill()
 
     # 4. Calculate Composite Inflation (YoY %) on full lookback before slicing to START_DATE
@@ -144,8 +140,7 @@ def main():
     merged_df['Housing_YoY'] = merged_df['Case_Shiller_Index'].pct_change(365) * 100
     merged_df['PPI_YoY'] = merged_df['PPI_Index'].pct_change(365) * 100
 
-    # Option 1 Multi-Source Weighted Average:
-    # 20% Official CPI + 25% Sticky CPI + 25% Case-Shiller Housing + 15% Wholesale PPI + 15% 5Y Breakeven
+    # Multi-Source Weighted Average:
     merged_df['Composite_Inflation'] = (
         (0.10 * merged_df['Official_CPI_YoY']) +
         (0.25 * merged_df['Sticky_CPI_YoY']) +
@@ -154,7 +149,7 @@ def main():
         (0.20 * merged_df['Breakeven_5Y'])
     )
 
-    # Filter back to START_DATE ('2023-01-01') now that 1-year lookbacks are complete
+    # Filter back to START_DATE ('2023-01-01')
     merged_df = merged_df.loc[START_DATE:].copy()
 
     # 5. Calculate Net Liquidity (Formula 1 - in Millions)
@@ -165,13 +160,8 @@ def main():
         + merged_df['Liquidity_Facilities'] 
         + merged_df['Loans_Held']
     )
-
-    # 6. Calculate Real (Inflation-Adjusted) Net Liquidity (Base = Jan 1, 2023 Dollars)
-    daily_inflation_rate = (merged_df['Composite_Inflation'] / 100) / 365.0
-    merged_df['Custom_Deflator'] = (1 + daily_inflation_rate).cumprod()
-    merged_df['Real_Net_Liquidity'] = merged_df['Net_Liquidity'] / merged_df['Custom_Deflator']
     
-    # 7. Format and Save
+    # 6. Format and Save
     merged_df.index.name = 'date'
     final_df = merged_df.reset_index()
     final_df['date'] = final_df['date'].dt.strftime('%Y-%m-%d')
@@ -179,7 +169,6 @@ def main():
     output_df = final_df[[
         'date', 
         'Net_Liquidity', 
-        'Real_Net_Liquidity',
         'Composite_Inflation',
         'Official_CPI_YoY',
         'Fed_Assets', 
