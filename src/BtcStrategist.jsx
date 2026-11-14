@@ -108,7 +108,6 @@ function evaluateCurveAtRisk(risk, nodeValues) {
   return nodeValues[nodeValues.length - 1];
 }
 
-// Built-in Error Boundary so the screen can never go white
 class SafeErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -136,12 +135,12 @@ const BtcStrategistInner = () => {
   const [rawRecords, setRawRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [liveStatus, setLiveStatus] = useState('');
-  const [activeTab, setActiveTab] = useState('rainbow'); // 'rainbow' | 'composite' | 'curve'
+  const [activeTab, setActiveTab] = useState('rainbow');
   const [showInfo, setShowInfo] = useState(false);
   const [showZLine, setShowZLine] = useState(true);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 960 : false);
 
-  // Fine-tuned Timeframe State (Rainbow & Composite tabs)
+  // Fine-tuned Timeframe State
   const [tfPreset, setTfPreset] = useState('2017');
   const [customStart, setCustomStart] = useState('2017-01-01');
   const [customEnd, setCustomEnd] = useState('');
@@ -155,7 +154,6 @@ const BtcStrategistInner = () => {
     liquidity: false
   });
 
-  // Today's Action Cash Reserve
   const [todayCash, setTodayCash] = useState(10000);
 
   // Backtest & Curve State
@@ -166,14 +164,12 @@ const BtcStrategistInner = () => {
   const [draggingIdx, setDraggingIdx] = useState(null);
   const svgRef = useRef(null);
 
-  // Responsive listener
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 960);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  // 1. Load public/btc_data.json (or public/btc_seed.json fallback) + live spot refresh
   useEffect(() => {
     let cancelled = false;
     const loadBtcData = async () => {
@@ -226,7 +222,6 @@ const BtcStrategistInner = () => {
         }
       }
 
-      // Live BTC spot refresh from Coinbase public API
       try {
         const r = await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot');
         if (r.ok) {
@@ -278,7 +273,6 @@ const BtcStrategistInner = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // Apply timeframe preset helper
   const applyTimeframePreset = (preset) => {
     setTfPreset(preset);
     if (!rawRecords.length) return;
@@ -304,7 +298,6 @@ const BtcStrategistInner = () => {
     setCustomEnd(lastDateStr);
   };
 
-  // 2. Compute Composite Z-score, Composite Risk, and Log10 price values
   const series = useMemo(() => {
     return rawRecords
       .filter(r => r && Array.isArray(r.q) && r.q.length === 7 && isFinite(r.p) && r.p > 0)
@@ -342,7 +335,6 @@ const BtcStrategistInner = () => {
           logQ99: safeLog10(r.q[6]),
           compZ: isFinite(compZ) ? Number(compZ.toFixed(2)) : null,
           compRisk: isFinite(compRisk) ? Number(compRisk.toFixed(2)) : null,
-          // Map Z-score (-3..+3) onto 0..100 right axis so it can be toggled on the same chart cleanly
           zMappedToRiskAxis: isFinite(compZ) ? Number(((compZ + 3) / 6 * 100).toFixed(2)) : null,
           eqmRisk
         };
@@ -365,7 +357,45 @@ const BtcStrategistInner = () => {
     return sliced.filter((_, idx) => idx % step === 0 || idx === sliced.length - 1);
   }, [series, customStart, customEnd, isMobile]);
 
-  // 3. Run Curve Backtest (with Green Accumulate & Red Distribute background column flags)
+  // Dynamic gradient stops calibrated to the exact visible min/max compRisk in chartData!
+  // This guarantees that 25%, 50%, and 75% Risk ALWAYS switch colors at the exact threshold lines
+  // regardless of whether you are zoomed into 1M, 3M, 1Y, or ALL!
+  const riskGradientStops = useMemo(() => {
+    const vals = chartData.map(d => d.compRisk).filter(v => v !== null && isFinite(v));
+    if (!vals.length) {
+      return [
+        { offset: "0%", color: "#ff4444" },
+        { offset: "100%", color: "#22c55e" }
+      ];
+    }
+    const minR = Math.min(...vals);
+    const maxR = Math.max(...vals);
+
+    // If the entire visible line is flat or inside a single zone, return that zone's solid color
+    if (maxR - minR < 1e-4) {
+      const c = riskZoneColor(maxR);
+      return [
+        { offset: "0%", color: c },
+        { offset: "100%", color: c }
+      ];
+    }
+
+    // SVG y=0% is the top of the line's bounding box (maxR), y=100% is the bottom (minR)
+    const offsetForRisk = (rVal) => `${clamp(((maxR - rVal) / (maxR - minR)) * 100, 0, 100).toFixed(2)}%`;
+
+    return [
+      { offset: "0%", color: "#ff4444" },
+      { offset: offsetForRisk(75), color: "#ff4444" },
+      { offset: offsetForRisk(75), color: "#f59e0b" },
+      { offset: offsetForRisk(50), color: "#f59e0b" },
+      { offset: offsetForRisk(50), color: "#95d81d" },
+      { offset: offsetForRisk(25), color: "#95d81d" },
+      { offset: offsetForRisk(25), color: "#22c55e" },
+      { offset: "100%", color: "#22c55e" }
+    ];
+  }, [chartData]);
+
+  // 3. Run Curve Backtest
   const backtest = useMemo(() => {
     if (!series.length) return null;
     const startMs = Date.parse(btStartDate + "T00:00:00Z");
@@ -414,7 +444,6 @@ const BtcStrategistInner = () => {
       const bhVal = Math.round(buyHold * 100) / 100;
       const cashVal = Math.round(cash * 100) / 100;
 
-      // Zone flags for Green (Accumulation) and Red (Distribution) background columns
       const accZoneBg = rate > 0.05 ? 1 : 0;
       const distZoneBg = rate < -0.05 ? 1 : 0;
 
@@ -561,7 +590,7 @@ const BtcStrategistInner = () => {
   const todayRate = isFinite(todayRisk) ? evaluateCurveAtRisk(todayRisk, curveNodes) : 0;
   const todaySpend = todayRate > 0.0001 ? todayCash * (todayRate / 100) : 0;
   const todayBtcBuy = latestRow?.p > 0 ? todaySpend / latestRow.p : 0;
-  const chartHeight = isMobile ? '380px' : '540px';
+  const chartHeight = isMobile ? '360px' : '540px';
 
   return (
     <div style={{
@@ -571,7 +600,7 @@ const BtcStrategistInner = () => {
       alignItems: 'start'
     }}>
       
-      {/* LEFT SIDEBAR (Stacks on top or below cleanly on mobile) */}
+      {/* LEFT SIDEBAR */}
       <div style={{
         display: 'flex',
         flexDirection: 'column',
@@ -711,7 +740,7 @@ const BtcStrategistInner = () => {
         </div>
       </div>
 
-      {/* RIGHT MAIN PANEL: Tabs + Interactive Charts */}
+      {/* RIGHT MAIN PANEL */}
       <div style={{
         ...cardStyle,
         display: 'flex',
@@ -745,7 +774,7 @@ const BtcStrategistInner = () => {
           </button>
         </div>
 
-        {/* Fine-Tuned Timeframe Controls Bar (Shown for Rainbow & Composite Risk tabs) */}
+        {/* Fine-Tuned Timeframe Controls Bar */}
         {activeTab !== 'curve' && (
           <div style={{
             display: 'flex',
@@ -817,7 +846,7 @@ const BtcStrategistInner = () => {
             lineHeight: 1.55,
             color: '#c9d1d9',
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
             gap: '14px'
           }}>
             <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
@@ -882,7 +911,7 @@ const BtcStrategistInner = () => {
                     stroke="#8b949e"
                     tick={{ fill: '#8b949e', fontSize: 11 }}
                     tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))}
-                    width={isMobile ? 54 : 68}
+                    width={isMobile ? 52 : 68}
                   />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
@@ -903,13 +932,13 @@ const BtcStrategistInner = () => {
           </div>
         )}
 
-        {/* TAB 2: COMPOSITE RISK & Z-SCORE (Multi-Colored by Risk Zone) */}
+        {/* TAB 2: COMPOSITE RISK & Z-SCORE (Exact Threshold Color Locking across all zoom levels) */}
         {activeTab === 'composite' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: isMobile ? '14px' : '16px', color: '#e6edf3' }}>
-                  Composite Valuation Risk (Multi-Zone Colored Line)
+                  Composite Valuation Risk (Exact Threshold Color Locking)
                 </h3>
                 <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap', fontSize: '11px', fontFamily: 'monospace' }}>
                   <span style={{ padding: '3px 8px', border: '1px solid #22c55e', color: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)', borderRadius: '4px' }}>
@@ -937,20 +966,12 @@ const BtcStrategistInner = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 10, right: isMobile ? 5 : 20, left: 0, bottom: 5 }}>
                   <defs>
-                    {/* Vertical gradient aligned with [0, 100] Risk Y-Axis:
-                        Top (y=0 -> 100% Risk) = Red Sell Zone
-                        25% down (75% Risk) -> 50% down (50% Risk) = Amber Trim Zone
-                        50% down (50% Risk) -> 75% down (25% Risk) = Lime Accumulate Zone
-                        Bottom (y=1 -> 0% Risk) = Green Buy Zone */}
+                    {/* Dynamically calibrated to [minR, maxR] of chartData so 25%, 50%, and 75%
+                        thresholds NEVER shift colors when zooming into 1M / 3M / 1Y / ALL */}
                     <linearGradient id="compRiskZoneGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#ff4444" />
-                      <stop offset="25%" stopColor="#ff4444" />
-                      <stop offset="25.1%" stopColor="#f59e0b" />
-                      <stop offset="50%" stopColor="#f59e0b" />
-                      <stop offset="50.1%" stopColor="#95d81d" />
-                      <stop offset="75%" stopColor="#95d81d" />
-                      <stop offset="75.1%" stopColor="#22c55e" />
-                      <stop offset="100%" stopColor="#22c55e" />
+                      {riskGradientStops.map((s, idx) => (
+                        <stop key={idx} offset={s.offset} stopColor={s.color} />
+                      ))}
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#21262d" vertical={false} />
@@ -961,7 +982,7 @@ const BtcStrategistInner = () => {
                     stroke="#8b949e"
                     tick={{ fill: '#8b949e', fontSize: 11 }}
                     tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))}
-                    width={isMobile ? 54 : 64}
+                    width={isMobile ? 52 : 64}
                   />
                   <YAxis
                     yAxisId="right"
@@ -971,11 +992,11 @@ const BtcStrategistInner = () => {
                     stroke="#8b949e"
                     tick={{ fill: '#8b949e', fontSize: 11 }}
                     tickFormatter={(v) => `${v}%`}
-                    width={46}
+                    width={44}
                   />
-                  <ReferenceLine yAxisId="right" y={25} stroke="#22c55e" strokeOpacity={0.55} strokeDasharray="3 3" />
-                  <ReferenceLine yAxisId="right" y={50} stroke="#8b949e" strokeOpacity={0.65} strokeDasharray="4 4" />
-                  <ReferenceLine yAxisId="right" y={75} stroke="#ff4444" strokeOpacity={0.55} strokeDasharray="3 3" />
+                  <ReferenceLine yAxisId="right" y={25} stroke="#22c55e" strokeOpacity={0.75} strokeDasharray="3 3" />
+                  <ReferenceLine yAxisId="right" y={50} stroke="#8b949e" strokeOpacity={0.75} strokeDasharray="4 4" />
+                  <ReferenceLine yAxisId="right" y={75} stroke="#ff4444" strokeOpacity={0.75} strokeDasharray="3 3" />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
                     formatter={(val, name, props) => {
@@ -995,7 +1016,7 @@ const BtcStrategistInner = () => {
                     dataKey="compRisk"
                     name="Composite Risk %"
                     stroke="url(#compRiskZoneGrad)"
-                    strokeWidth={2.8}
+                    strokeWidth={3}
                     dot={false}
                     connectNulls={false}
                     isAnimationActive={false}
@@ -1202,9 +1223,8 @@ const BtcStrategistInner = () => {
                         stroke="#8b949e"
                         tick={{ fill: '#8b949e', fontSize: 11 }}
                         tickFormatter={(v) => btLogScale ? usdShort(Math.pow(10, Number(v))) : usdShort(Number(v))}
-                        width={isMobile ? 54 : 68}
+                        width={isMobile ? 52 : 68}
                       />
-                      {/* Hidden [0, 1] Y-Axis to render full-height Green & Red zone background columns */}
                       <YAxis yAxisId="zone" domain={[0, 1]} hide={true} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
@@ -1220,7 +1240,6 @@ const BtcStrategistInner = () => {
                         wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '8px' }}
                         formatter={(value) => (value === 'Accumulation Zone' || value === 'Distribution Zone' ? null : value)}
                       />
-                      {/* Green Accumulation & Red Distribution Background Columns */}
                       <Area
                         yAxisId="zone"
                         type="stepAfter"
