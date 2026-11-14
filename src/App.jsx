@@ -17,7 +17,7 @@ const formatTooltipValue = (value) => {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(value);
 };
 
-// --- CHART COMPONENT WITH BUILT-IN EXPLAINER ---
+// --- CHART COMPONENT WITH BUILT-IN EXPLAINER & MOBILE RESPONSIVENESS ---
 const DashboardChart = ({ 
   title, 
   data, 
@@ -30,7 +30,8 @@ const DashboardChart = ({
   secondaryName = 'Official CPI',
   formulaBadge = null,
   explanation = null,
-  defaultShowInfo = false
+  defaultShowInfo = false,
+  isMobile = false
 }) => {
   const [showInfo, setShowInfo] = useState(defaultShowInfo);
 
@@ -46,33 +47,38 @@ const DashboardChart = ({
   const max = Math.max(...values);
   const padding = (max - min) * 0.05 || 1;
   const showDots = data.length < 60;
+  const chartHeight = isMobile ? '270px' : height;
 
   return (
     <div style={{ 
       backgroundColor: '#161b22', 
-      padding: '20px', 
+      padding: isMobile ? '12px' : '20px', 
       borderRadius: '8px', 
       border: '1px solid #30363d',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      minWidth: 0
     }}>
       {/* Chart Header + Formula Badge + Info Toggle */}
       <div style={{ 
         display: 'flex', 
         justifyContent: 'space-between', 
         alignItems: 'flex-start', 
-        gap: '10px',
-        marginBottom: showInfo || formulaBadge ? '10px' : '15px',
+        gap: '8px',
+        marginBottom: showInfo || formulaBadge ? '10px' : '12px',
         flexWrap: 'wrap'
       }}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: '15px', color: '#e6edf3', fontWeight: 600 }}>{title}</h3>
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+          <h3 style={{ margin: 0, fontSize: isMobile ? '14px' : '15px', color: '#e6edf3', fontWeight: 600, lineHeight: 1.3 }}>
+            {title}
+          </h3>
           {formulaBadge && (
             <div style={{ 
               marginTop: '4px', 
-              fontSize: '11px', 
+              fontSize: isMobile ? '10.5px' : '11px', 
               color: '#8b949e', 
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' 
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              wordBreak: 'break-word'
             }}>
               {formulaBadge}
             </div>
@@ -87,13 +93,14 @@ const DashboardChart = ({
               color: showInfo ? '#ffffff' : '#8b949e',
               border: '1px solid #30363d',
               borderRadius: '6px',
-              padding: '4px 10px',
+              padding: '4px 9px',
               fontSize: '11px',
               fontWeight: 600,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '5px',
+              whiteSpace: 'nowrap',
               transition: 'all 0.2s'
             }}
           >
@@ -109,9 +116,9 @@ const DashboardChart = ({
           border: `1px solid ${color}55`,
           borderLeft: `3px solid ${color}`,
           borderRadius: '6px',
-          padding: '12px 14px',
-          marginBottom: '15px',
-          fontSize: '12.5px',
+          padding: isMobile ? '10px' : '12px 14px',
+          marginBottom: '12px',
+          fontSize: isMobile ? '11.5px' : '12.5px',
           lineHeight: '1.5',
           color: '#c9d1d9'
         }}>
@@ -120,15 +127,15 @@ const DashboardChart = ({
       )}
       
       {/* Chart Canvas */}
-      <div style={{ height: height, width: '100%' }}>
+      <div style={{ height: chartHeight, width: '100%' }}>
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data}>
+          <LineChart data={data} margin={{ top: 5, right: isMobile ? 4 : 10, left: 0, bottom: 2 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#30363d" vertical={false} />
             <XAxis 
               dataKey="date" 
               stroke="#8b949e" 
-              tick={{fill: '#8b949e', fontSize: 11}}
-              minTickGap={50}
+              tick={{ fill: '#8b949e', fontSize: isMobile ? 10 : 11 }}
+              minTickGap={isMobile ? 35 : 50}
               tickFormatter={(str) => {
                 const date = new Date(str);
                 const userTimezoneOffset = date.getTimezoneOffset() * 60000;
@@ -139,12 +146,12 @@ const DashboardChart = ({
             <YAxis 
               domain={[min - padding, max + padding]} 
               stroke="#8b949e"
-              tick={{fill: '#8b949e', fontSize: 11}} 
-              width={50}
+              tick={{ fill: '#8b949e', fontSize: isMobile ? 10 : 11 }} 
+              width={isMobile ? 44 : 52}
               tickFormatter={isPercent ? formatPercentAxis : formatCurrencyAxis} 
             />
             <Tooltip 
-              contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#fff' }}
+              contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#fff', fontSize: '12px' }}
               labelFormatter={(label) => {
                  const date = new Date(label);
                  const userTimezoneOffset = date.getTimezoneOffset() * 60000;
@@ -156,15 +163,15 @@ const DashboardChart = ({
                 return [`$${formatTooltipValue(value)}`, "Amount (Millions)"];
               }}
             />
-            {secondaryKey && <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />}
+            {secondaryKey && <Legend wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '6px' }} />}
             <Line 
               type="monotone" 
               dataKey="value" 
               name={primaryName}
               stroke={color} 
               strokeWidth={2} 
-              dot={showDots ? { r: 4, fill: color, stroke: '#000000', strokeWidth: 2 } : false}
-              activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2 }}
+              dot={showDots ? { r: isMobile ? 3 : 4, fill: color, stroke: '#000000', strokeWidth: 2 } : false}
+              activeDot={{ r: 5, stroke: '#fff', strokeWidth: 2 }}
               isAnimationActive={false}
             />
             {secondaryKey && (
@@ -192,6 +199,7 @@ const App = () => {
   const [fullData, setFullData] = useState(null);
   const [filteredData, setFilteredData] = useState(null);
   const [meta, setMeta] = useState(null);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false);
 
   // Controls
   const [dashboardTab, setDashboardTab] = useState('macro'); // 'macro' | 'btc'
@@ -200,6 +208,13 @@ const App = () => {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [showMethodology, setShowMethodology] = useState(false);
+
+  // Mobile viewport listener
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // 1. Fetch
   useEffect(() => {
@@ -232,7 +247,6 @@ const App = () => {
             if (lastItem) setMeta({ last_updated: lastItem.date });
 
         } else {
-            // OLD LEGACY FORMAT
             setFullData({
                 formula1: format(rawData.formula_1),
                 compositeInflation: format(rawData.composite_inflation),
@@ -291,14 +305,15 @@ const App = () => {
   if (!filteredData) return <div style={{padding: 50, color: 'white'}}>Loading Dashboard...</div>;
 
   const buttonStyle = (isActive) => ({
-    padding: '6px 12px',
+    padding: isMobile ? '6px 10px' : '6px 12px',
     backgroundColor: isActive ? '#1f6feb' : '#21262d',
     color: isActive ? '#ffffff' : '#c9d1d9',
     border: '1px solid #30363d',
     borderRadius: '6px',
     cursor: 'pointer',
     fontWeight: '600',
-    fontSize: '12px',
+    fontSize: isMobile ? '11px' : '12px',
+    whiteSpace: 'nowrap',
     transition: 'all 0.2s'
   });
 
@@ -306,8 +321,9 @@ const App = () => {
     backgroundColor: '#0d1117',
     border: '1px solid #30363d',
     color: 'white',
-    padding: '5px',
+    padding: '4px 6px',
     borderRadius: '4px',
+    fontSize: isMobile ? '11px' : '12px',
     colorScheme: 'dark' 
   };
 
@@ -317,7 +333,7 @@ const App = () => {
       backgroundImage: 'linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px)',
       backgroundSize: '30px 30px',
       minHeight: '100vh', 
-      padding: '20px', 
+      padding: isMobile ? '10px' : '20px', 
       color: 'white', 
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' 
     }}>
@@ -325,22 +341,23 @@ const App = () => {
         
         {/* Header Controls */}
         <div style={{ 
-          marginBottom: '20px', 
+          marginBottom: isMobile ? '14px' : '20px', 
           borderBottom: '1px solid #30363d', 
-          paddingBottom: '20px',
+          paddingBottom: isMobile ? '14px' : '20px',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'end',
+          alignItems: isMobile ? 'stretch' : 'end',
+          flexDirection: isMobile ? 'column' : 'row',
           flexWrap: 'wrap',
-          gap: '20px'
+          gap: isMobile ? '12px' : '20px'
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '22px' }}>
+            <h1 style={{ margin: 0, fontSize: isMobile ? '18px' : '22px', lineHeight: 1.25 }}>
               {dashboardTab === 'btc'
                 ? 'BTC Strategic Dollar Cost Averaging Signal'
                 : 'True Inflation & Net Fed Liquidity'}
             </h1>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
               
               {/* Top-Level Suite Switcher */}
               <button
@@ -369,7 +386,7 @@ const App = () => {
                   borderRadius: '12px',
                   fontWeight: 600 
                 }}>
-                  Last Updated: {meta.last_updated}
+                  Updated: {meta.last_updated}
                 </span>
               )}
 
@@ -383,16 +400,16 @@ const App = () => {
                     color: showMethodology ? '#fff' : '#58a6ff'
                   }}
                 >
-                  📖 {showMethodology ? 'Hide Methodology Guide' : 'Methodology & Formula Guide'}
+                  📖 {showMethodology ? 'Hide Guide' : 'Methodology Guide'}
                 </button>
               )}
             </div>
           </div>
 
           {dashboardTab === 'macro' && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: isMobile ? 'stretch' : 'flex-end', gap: '8px' }}>
               {/* Top Row: Quick Selects */}
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                 {['1w', '2w', '30d', '3m', '6m', '1y', 'all'].map(range => (
                   <button 
                     key={range} 
@@ -402,23 +419,25 @@ const App = () => {
                     {range.toUpperCase()}
                   </button>
                 ))}
-                <button 
-                  onClick={() => setViewMode(viewMode === 'grid' ? 'full' : 'grid')} 
-                  style={{...buttonStyle(false), marginLeft: '10px'}}
-                >
-                  {viewMode === 'grid' ? '☰ List' : '⊞ Grid'}
-                </button>
+                {!isMobile && (
+                  <button 
+                    onClick={() => setViewMode(viewMode === 'grid' ? 'full' : 'grid')} 
+                    style={{...buttonStyle(false), marginLeft: '6px'}}
+                  >
+                    {viewMode === 'grid' ? '☰ List' : '⊞ Grid'}
+                  </button>
+                )}
               </div>
 
               {/* Bottom Row: Custom Date Range */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#21262d', padding: '5px 10px', borderRadius: '6px' }}>
-                <span style={{ fontSize: '12px', color: '#8b949e' }}>Custom:</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#21262d', padding: '5px 8px', borderRadius: '6px', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '11px', color: '#8b949e' }}>Custom:</span>
                 <input 
                   type="date" 
                   style={inputStyle} 
                   onChange={(e) => { setCustomStart(e.target.value); setTimeRange('custom'); }} 
                 />
-                <span style={{ color: '#8b949e' }}>-</span>
+                <span style={{ color: '#8b949e', fontSize: '11px' }}>to</span>
                 <input 
                   type="date" 
                   style={inputStyle} 
@@ -435,14 +454,14 @@ const App = () => {
             backgroundColor: '#161b22',
             border: '1px solid #58a6ff',
             borderRadius: '8px',
-            padding: '20px',
-            marginBottom: '25px',
+            padding: isMobile ? '12px' : '20px',
+            marginBottom: '20px',
             color: '#c9d1d9',
             fontSize: '13px',
             lineHeight: '1.6'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h2 style={{ margin: 0, fontSize: '16px', color: '#58a6ff' }}>
+              <h2 style={{ margin: 0, fontSize: isMobile ? '14px' : '16px', color: '#58a6ff' }}>
                 Dashboard Methodology: How Our Calculations Work
               </h2>
               <button 
@@ -452,14 +471,14 @@ const App = () => {
                 ✕ Close
               </button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-              <div style={{ backgroundColor: '#0d1117', padding: '15px', borderRadius: '6px', border: '1px solid #30363d' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px' }}>
+              <div style={{ backgroundColor: '#0d1117', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
                 <strong style={{ color: '#ff7b72', display: 'block', marginBottom: '6px' }}>
                   1. Why We Built a Custom Inflation Composite
                 </strong>
                 Official CPI (Consumer Price Index) relies on lagging survey data like <em>Owners' Equivalent Rent (OER)</em>, which trails real-time housing prices by 6–12 months, and uses hedonic quality adjustments that mask out-of-pocket price increases. Our <strong>Hoagie Composite Inflation Rate</strong> blends 5 distinct Federal Reserve (FRED) series to capture sticky service costs, actual home price appreciation, wholesale supply-chain pressures, and daily bond-market inflation expectations.
               </div>
-              <div style={{ backgroundColor: '#0d1117', padding: '15px', borderRadius: '6px', border: '1px solid #30363d' }}>
+              <div style={{ backgroundColor: '#0d1117', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
                 <strong style={{ color: '#a371f7', display: 'block', marginBottom: '6px' }}>
                   2. How Net Fed Liquidity (Formula #1) Works
                 </strong>
@@ -475,30 +494,31 @@ const App = () => {
         ) : (
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: viewMode === 'grid' ? '1fr 1fr' : '1fr', 
-            gap: '20px' 
+            gridTemplateColumns: (!isMobile && viewMode === 'grid') ? '1fr 1fr' : '1fr', 
+            gap: isMobile ? '14px' : '20px' 
           }}>
             
-            {/* TOP CHART (Spans Full Width in Grid Mode): Composite Inflation */}
-            <div style={{ gridColumn: viewMode === 'grid' ? '1 / -1' : 'auto' }}>
+            {/* TOP CHART: Composite Inflation */}
+            <div style={{ gridColumn: (!isMobile && viewMode === 'grid') ? '1 / -1' : 'auto' }}>
               <DashboardChart 
                 title="Hoagie Composite Inflation Rate vs. Official CPI-U (YoY %)" 
                 data={filteredData.compositeInflation} 
                 color="#ff7b72" 
                 height="380px"
                 isPercent={true}
+                isMobile={isMobile}
                 primaryName="Hoagie Composite Inflation"
                 secondaryKey="officialCpi"
                 secondaryColor="#8b949e"
                 secondaryName="Official CPI-U (BLS)"
-                defaultShowInfo={true}
+                defaultShowInfo={!isMobile}
                 formulaBadge="Formula: (0.10 × CPI) + (0.25 × Sticky CPI) + (0.20 × Case-Shiller Housing) + (0.25 × Wholesale PPI) + (0.20 × 5Y Breakeven)"
                 explanation={
                   <div>
                     <div style={{ marginBottom: '8px', fontWeight: 600, color: '#e6edf3' }}>
                       Multi-Source Weighted Average (5 FRED Data Feeds):
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '8px' }}>
                       <div>• <strong style={{ color: '#ff7b72' }}>10% Official CPI-U (CPIAUCSL):</strong> Standard baseline Year-over-Year urban consumer price basket.</div>
                       <div>• <strong style={{ color: '#ff7b72' }}>25% Sticky-Price CPI (CORESTICKM159SFRBATL):</strong> Atlanta Fed measure tracking slow-changing, permanent service costs (insurance, medical, rent, dining).</div>
                       <div>• <strong style={{ color: '#ff7b72' }}>20% Case-Shiller Home Prices (CSUSHPINSA):</strong> Tracks actual U.S. national home price YoY appreciation instead of lagging Owners' Equivalent Rent surveys.</div>
@@ -515,6 +535,7 @@ const App = () => {
               title="Formula #1 (Net Liquidity)" 
               data={filteredData.formula1} 
               color="#a371f7" 
+              isMobile={isMobile}
               formulaBadge="Formula: WALCL - TGA - RRP + Liquidity Facilities + Loans Held"
               explanation={
                 <div>
@@ -529,6 +550,7 @@ const App = () => {
               title="Treasury General Account (TGA)" 
               data={filteredData.tga} 
               color="#3fb950" 
+              isMobile={isMobile}
               formulaBadge="Source: Daily U.S. Treasury Operating Cash Balance API"
               explanation={
                 <div>
@@ -543,6 +565,7 @@ const App = () => {
               title="Fed Total Assets (WALCL)" 
               data={filteredData.fedAssets} 
               color="#f85149" 
+              isMobile={isMobile}
               formulaBadge="Source: FRED Series WALCL (Updated Weekly on Thursdays)"
               explanation={
                 <div>
@@ -557,6 +580,7 @@ const App = () => {
               title="Overnight Reverse Repo (RRP)" 
               data={filteredData.rrp} 
               color="#f0883e" 
+              isMobile={isMobile}
               formulaBadge="Source: FRED Series RRPONTSYD (Converted from Billions to Millions)"
               explanation={
                 <div>
@@ -571,6 +595,7 @@ const App = () => {
               title="Liquidity & Credit Facilities (H41RESPPALDKNWW)" 
               data={filteredData.loansFacilities} 
               color="#58a6ff" 
+              isMobile={isMobile}
               formulaBadge="Source: FRED Series H41RESPPALDKNWW"
               explanation={
                 <div>
@@ -585,6 +610,7 @@ const App = () => {
               title="Loans Held by the Federal Reserve (WLCFLL)" 
               data={filteredData.loansHeld} 
               color="#d29922" 
+              isMobile={isMobile}
               formulaBadge="Source: FRED Series WLCFLL"
               explanation={
                 <div>
@@ -599,12 +625,12 @@ const App = () => {
 
         {/* Footer */}
         <div style={{ 
-          marginTop: '40px', 
-          paddingTop: '20px', 
+          marginTop: '30px', 
+          paddingTop: '16px', 
           borderTop: '1px solid #30363d', 
           textAlign: 'center',
           color: '#8b949e',
-          fontSize: '14px',
+          fontSize: '13px',
           fontWeight: '500'
         }}>
           Product of <span style={{ color: '#58a6ff' }}>Hoagie_Trades</span>
