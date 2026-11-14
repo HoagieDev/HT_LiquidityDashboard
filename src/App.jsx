@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
+import BtcStrategist from './BtcStrategist';
 
 // --- UTILS ---
 const formatCurrencyAxis = (value) => {
@@ -193,6 +194,7 @@ const App = () => {
   const [meta, setMeta] = useState(null);
 
   // Controls
+  const [dashboardTab, setDashboardTab] = useState('macro'); // 'macro' | 'btc'
   const [timeRange, setTimeRange] = useState('30d');
   const [viewMode, setViewMode] = useState('grid');
   const [customStart, setCustomStart] = useState('');
@@ -333,77 +335,102 @@ const App = () => {
           gap: '20px'
         }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: '22px' }}>True Inflation & Net Fed Liquidity</h1>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', flexWrap: 'wrap' }}>
-              <p style={{ color: '#8b949e', margin: 0, fontSize: '13px' }}>
-                Multi-Source Composite Inflation & Federal Reserve Balance Sheet Tracker
-              </p>
+            <h1 style={{ margin: 0, fontSize: '22px' }}>
+              {dashboardTab === 'btc'
+                ? 'BTC Strategic Dollar Cost Averaging Signal'
+                : 'True Inflation & Net Fed Liquidity'}
+            </h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px', flexWrap: 'wrap' }}>
+              
+              {/* Top-Level Suite Switcher */}
+              <button
+                onClick={() => setDashboardTab('macro')}
+                style={buttonStyle(dashboardTab === 'macro')}
+              >
+                💧 Macro & Liquidity Charts
+              </button>
+              <button
+                onClick={() => setDashboardTab('btc')}
+                style={{
+                  ...buttonStyle(dashboardTab === 'btc'),
+                  borderColor: '#f3cd7a',
+                  color: dashboardTab === 'btc' ? '#ffffff' : '#f3cd7a'
+                }}
+              >
+                ₿ BTC Strategic DCA Signal
+              </button>
+
               {meta?.last_updated && (
                 <span style={{ 
                   backgroundColor: '#238636', 
                   color: 'white', 
                   fontSize: '11px', 
-                  padding: '2px 8px', 
+                  padding: '3px 8px', 
                   borderRadius: '12px',
                   fontWeight: 600 
                 }}>
                   Last Updated: {meta.last_updated}
                 </span>
               )}
-              <button
-                onClick={() => setShowMethodology(!showMethodology)}
-                style={{
-                  ...buttonStyle(showMethodology),
-                  backgroundColor: showMethodology ? '#1f6feb' : '#161b22',
-                  borderColor: '#58a6ff',
-                  color: showMethodology ? '#fff' : '#58a6ff'
-                }}
-              >
-                📖 {showMethodology ? 'Hide Methodology Guide' : 'Methodology & Formula Guide'}
-              </button>
-            </div>
-          </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
-            {/* Top Row: Quick Selects */}
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {['1w', '2w', '30d', '3m', '6m', '1y', 'all'].map(range => (
-                <button 
-                  key={range} 
-                  onClick={() => { setTimeRange(range); }} 
-                  style={buttonStyle(timeRange === range)}
+              {dashboardTab === 'macro' && (
+                <button
+                  onClick={() => setShowMethodology(!showMethodology)}
+                  style={{
+                    ...buttonStyle(showMethodology),
+                    backgroundColor: showMethodology ? '#1f6feb' : '#161b22',
+                    borderColor: '#58a6ff',
+                    color: showMethodology ? '#fff' : '#58a6ff'
+                  }}
                 >
-                  {range.toUpperCase()}
+                  📖 {showMethodology ? 'Hide Methodology Guide' : 'Methodology & Formula Guide'}
                 </button>
-              ))}
-              <button 
-                onClick={() => setViewMode(viewMode === 'grid' ? 'full' : 'grid')} 
-                style={{...buttonStyle(false), marginLeft: '10px'}}
-              >
-                {viewMode === 'grid' ? '☰ List' : '⊞ Grid'}
-              </button>
-            </div>
-
-            {/* Bottom Row: Custom Date Range */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#21262d', padding: '5px 10px', borderRadius: '6px' }}>
-              <span style={{ fontSize: '12px', color: '#8b949e' }}>Custom:</span>
-              <input 
-                type="date" 
-                style={inputStyle} 
-                onChange={(e) => { setCustomStart(e.target.value); setTimeRange('custom'); }} 
-              />
-              <span style={{ color: '#8b949e' }}>-</span>
-              <input 
-                type="date" 
-                style={inputStyle} 
-                onChange={(e) => { setCustomEnd(e.target.value); setTimeRange('custom'); }} 
-              />
+              )}
             </div>
           </div>
+
+          {dashboardTab === 'macro' && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px' }}>
+              {/* Top Row: Quick Selects */}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {['1w', '2w', '30d', '3m', '6m', '1y', 'all'].map(range => (
+                  <button 
+                    key={range} 
+                    onClick={() => { setTimeRange(range); }} 
+                    style={buttonStyle(timeRange === range)}
+                  >
+                    {range.toUpperCase()}
+                  </button>
+                ))}
+                <button 
+                  onClick={() => setViewMode(viewMode === 'grid' ? 'full' : 'grid')} 
+                  style={{...buttonStyle(false), marginLeft: '10px'}}
+                >
+                  {viewMode === 'grid' ? '☰ List' : '⊞ Grid'}
+                </button>
+              </div>
+
+              {/* Bottom Row: Custom Date Range */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#21262d', padding: '5px 10px', borderRadius: '6px' }}>
+                <span style={{ fontSize: '12px', color: '#8b949e' }}>Custom:</span>
+                <input 
+                  type="date" 
+                  style={inputStyle} 
+                  onChange={(e) => { setCustomStart(e.target.value); setTimeRange('custom'); }} 
+                />
+                <span style={{ color: '#8b949e' }}>-</span>
+                <input 
+                  type="date" 
+                  style={inputStyle} 
+                  onChange={(e) => { setCustomEnd(e.target.value); setTimeRange('custom'); }} 
+                />
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Collapsible Global Methodology Overview Box */}
-        {showMethodology && (
+        {/* Collapsible Global Methodology Overview Box (Macro Tab) */}
+        {dashboardTab === 'macro' && showMethodology && (
           <div style={{
             backgroundColor: '#161b22',
             border: '1px solid #58a6ff',
@@ -442,129 +469,133 @@ const App = () => {
           </div>
         )}
 
-        {/* Charts Container */}
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: viewMode === 'grid' ? '1fr 1fr' : '1fr', 
-          gap: '20px' 
-        }}>
-          
-          {/* TOP CHART (Spans Full Width in Grid Mode): Composite Inflation */}
-          <div style={{ gridColumn: viewMode === 'grid' ? '1 / -1' : 'auto' }}>
+        {/* Active View Content */}
+        {dashboardTab === 'btc' ? (
+          <BtcStrategist />
+        ) : (
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: viewMode === 'grid' ? '1fr 1fr' : '1fr', 
+            gap: '20px' 
+          }}>
+            
+            {/* TOP CHART (Spans Full Width in Grid Mode): Composite Inflation */}
+            <div style={{ gridColumn: viewMode === 'grid' ? '1 / -1' : 'auto' }}>
+              <DashboardChart 
+                title="Hoagie Composite Inflation Rate vs. Official CPI-U (YoY %)" 
+                data={filteredData.compositeInflation} 
+                color="#ff7b72" 
+                height="380px"
+                isPercent={true}
+                primaryName="Hoagie Composite Inflation"
+                secondaryKey="officialCpi"
+                secondaryColor="#8b949e"
+                secondaryName="Official CPI-U (BLS)"
+                defaultShowInfo={true}
+                formulaBadge="Formula: (0.10 × CPI) + (0.25 × Sticky CPI) + (0.20 × Case-Shiller Housing) + (0.25 × Wholesale PPI) + (0.20 × 5Y Breakeven)"
+                explanation={
+                  <div>
+                    <div style={{ marginBottom: '8px', fontWeight: 600, color: '#e6edf3' }}>
+                      Multi-Source Weighted Average (5 FRED Data Feeds):
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+                      <div>• <strong style={{ color: '#ff7b72' }}>10% Official CPI-U (CPIAUCSL):</strong> Standard baseline Year-over-Year urban consumer price basket.</div>
+                      <div>• <strong style={{ color: '#ff7b72' }}>25% Sticky-Price CPI (CORESTICKM159SFRBATL):</strong> Atlanta Fed measure tracking slow-changing, permanent service costs (insurance, medical, rent, dining).</div>
+                      <div>• <strong style={{ color: '#ff7b72' }}>20% Case-Shiller Home Prices (CSUSHPINSA):</strong> Tracks actual U.S. national home price YoY appreciation instead of lagging Owners' Equivalent Rent surveys.</div>
+                      <div>• <strong style={{ color: '#ff7b72' }}>25% Wholesale PPI (PPIACO):</strong> Producer Price Index for All Commodities, capturing upstream supply-chain inflation before it hits retail shelves.</div>
+                      <div>• <strong style={{ color: '#ff7b72' }}>20% 5Y Breakeven Inflation (T5YIE):</strong> Real-time daily bond market inflation expectations derived from 5-Year Treasury vs. TIPS yields.</div>
+                    </div>
+                  </div>
+                }
+              />
+            </div>
+
+            {/* CHART 2: Nominal Net Liquidity */}
             <DashboardChart 
-              title="Hoagie Composite Inflation Rate vs. Official CPI-U (YoY %)" 
-              data={filteredData.compositeInflation} 
-              color="#ff7b72" 
-              height="380px"
-              isPercent={true}
-              primaryName="Hoagie Composite Inflation"
-              secondaryKey="officialCpi"
-              secondaryColor="#8b949e"
-              secondaryName="Official CPI-U (BLS)"
-              defaultShowInfo={true}
-              formulaBadge="Formula: (0.20 × CPI) + (0.25 × Sticky CPI) + (0.25 × Case-Shiller Housing) + (0.15 × Wholesale PPI) + (0.15 × 5Y Breakeven)"
+              title="Formula #1 (Net Liquidity)" 
+              data={filteredData.formula1} 
+              color="#a371f7" 
+              formulaBadge="Formula: WALCL - TGA - RRP + Liquidity Facilities + Loans Held"
               explanation={
                 <div>
-                  <div style={{ marginBottom: '8px', fontWeight: 600, color: '#e6edf3' }}>
-                    Multi-Source Weighted Average (5 FRED Data Feeds):
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
-                    <div>• <strong style={{ color: '#ff7b72' }}>10% Official CPI-U (CPIAUCSL):</strong> Standard baseline Year-over-Year urban consumer price basket.</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>25% Sticky-Price CPI (CORESTICKM159SFRBATL):</strong> Atlanta Fed measure tracking slow-changing, permanent service costs (insurance, medical, rent, dining).</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>20% Case-Shiller Home Prices (CSUSHPINSA):</strong> Tracks actual U.S. national home price YoY appreciation instead of lagging Owners' Equivalent Rent surveys.</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>25% Wholesale PPI (PPIACO):</strong> Producer Price Index for All Commodities, capturing upstream supply-chain inflation before it hits retail shelves.</div>
-                    <div>• <strong style={{ color: '#ff7b72' }}>20% 5Y Breakeven Inflation (T5YIE):</strong> Real-time daily bond market inflation expectations derived from 5-Year Treasury vs. TIPS yields.</div>
-                  </div>
+                  <strong>What it measures:</strong> The directional flow of spendable liquidity available in the financial system (in Millions).<br/>
+                  <strong>How it’s calculated:</strong> Starts with Total Fed Assets (<code>WALCL</code>), subtracts cash locked up in the Treasury General Account (<code>TGA</code>) and Overnight Reverse Repo facility (<code>RRP</code>), and adds back active Fed lending (<code>H41RESPPALDKNWW</code> + <code>WLCFLL</code>). Rising net liquidity generally supports risk assets.
                 </div>
               }
             />
+
+            {/* CHART 3: TGA */}
+            <DashboardChart 
+              title="Treasury General Account (TGA)" 
+              data={filteredData.tga} 
+              color="#3fb950" 
+              formulaBadge="Source: Daily U.S. Treasury Operating Cash Balance API"
+              explanation={
+                <div>
+                  <strong>What it measures:</strong> The U.S. Government’s checking account held at the Federal Reserve.<br/>
+                  <strong>Liquidity Impact (Inverse):</strong> When the TGA rises (via tax collection or bond issuance), cash is pulled <em>out</em> of commercial banks, draining market liquidity. When the Treasury spends down the TGA, cash flows back into the economy, <em>adding</em> liquidity.
+                </div>
+              }
+            />
+
+            {/* CHART 4: Total Assets (WALCL) */}
+            <DashboardChart 
+              title="Fed Total Assets (WALCL)" 
+              data={filteredData.fedAssets} 
+              color="#f85149" 
+              formulaBadge="Source: FRED Series WALCL (Updated Weekly on Thursdays)"
+              explanation={
+                <div>
+                  <strong>What it measures:</strong> Total securities (U.S. Treasuries and Mortgage-Backed Securities) and assets held on the Federal Reserve’s balance sheet.<br/>
+                  <strong>Liquidity Impact (Direct):</strong> Rising assets indicate Quantitative Easing (QE / money printing), which injects liquidity. Falling assets indicate Quantitative Tightening (QT / balance sheet runoff), which drains liquidity.
+                </div>
+              }
+            />
+
+            {/* CHART 5: Reverse Repo (RRP) */}
+            <DashboardChart 
+              title="Overnight Reverse Repo (RRP)" 
+              data={filteredData.rrp} 
+              color="#f0883e" 
+              formulaBadge="Source: FRED Series RRPONTSYD (Converted from Billions to Millions)"
+              explanation={
+                <div>
+                  <strong>What it measures:</strong> Excess cash parked overnight at the Federal Reserve by money market funds and eligible institutions.<br/>
+                  <strong>Liquidity Impact (Inverse):</strong> Money sitting in the RRP is idle and removed from active market circulation. When RRP falls, money market funds are deploying that cash back into Treasury bills and private credit markets, <em>boosting</em> net liquidity.
+                </div>
+              }
+            />
+
+            {/* CHART 6: Liquidity Facilities */}
+            <DashboardChart 
+              title="Liquidity & Credit Facilities (H41RESPPALDKNWW)" 
+              data={filteredData.loansFacilities} 
+              color="#58a6ff" 
+              formulaBadge="Source: FRED Series H41RESPPALDKNWW"
+              explanation={
+                <div>
+                  <strong>What it measures:</strong> Emergency and specialized Federal Reserve lending programs.<br/>
+                  <strong>Liquidity Impact (Direct):</strong> When the Fed extends credit through liquidity facilities, it creates new reserves for commercial banks, directly increasing system liquidity.
+                </div>
+              }
+            />
+
+            {/* CHART 7: Loans Held */}
+            <DashboardChart 
+              title="Loans Held by the Federal Reserve (WLCFLL)" 
+              data={filteredData.loansHeld} 
+              color="#d29922" 
+              formulaBadge="Source: FRED Series WLCFLL"
+              explanation={
+                <div>
+                  <strong>What it measures:</strong> Direct loans extended by the Federal Reserve to depository institutions (including Discount Window borrowing and bank term funding).<br/>
+                  <strong>Liquidity Impact (Direct):</strong> Increases in loans held inject reserve balances directly into banks experiencing funding stress, adding to net liquidity.
+                </div>
+              }
+            />
+            
           </div>
-
-          {/* CHART 2: Nominal Net Liquidity */}
-          <DashboardChart 
-            title="Formula #1 (Net Liquidity)" 
-            data={filteredData.formula1} 
-            color="#a371f7" 
-            formulaBadge="Formula: WALCL - TGA - RRP + Liquidity Facilities + Loans Held"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> The directional flow of spendable liquidity available in the financial system (in Millions).<br/>
-                <strong>How it’s calculated:</strong> Starts with Total Fed Assets (<code>WALCL</code>), subtracts cash locked up in the Treasury General Account (<code>TGA</code>) and Overnight Reverse Repo facility (<code>RRP</code>), and adds back active Fed lending (<code>H41RESPPALDKNWW</code> + <code>WLCFLL</code>). Rising net liquidity generally supports risk assets.
-              </div>
-            }
-          />
-
-          {/* CHART 3: TGA */}
-          <DashboardChart 
-            title="Treasury General Account (TGA)" 
-            data={filteredData.tga} 
-            color="#3fb950" 
-            formulaBadge="Source: Daily U.S. Treasury Operating Cash Balance API"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> The U.S. Government’s checking account held at the Federal Reserve.<br/>
-                <strong>Liquidity Impact (Inverse):</strong> When the TGA rises (via tax collection or bond issuance), cash is pulled <em>out</em> of commercial banks, draining market liquidity. When the Treasury spends down the TGA, cash flows back into the economy, <em>adding</em> liquidity.
-              </div>
-            }
-          />
-
-          {/* CHART 4: Total Assets (WALCL) */}
-          <DashboardChart 
-            title="Fed Total Assets (WALCL)" 
-            data={filteredData.fedAssets} 
-            color="#f85149" 
-            formulaBadge="Source: FRED Series WALCL (Updated Weekly on Thursdays)"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> Total securities (U.S. Treasuries and Mortgage-Backed Securities) and assets held on the Federal Reserve’s balance sheet.<br/>
-                <strong>Liquidity Impact (Direct):</strong> Rising assets indicate Quantitative Easing (QE / money printing), which injects liquidity. Falling assets indicate Quantitative Tightening (QT / balance sheet runoff), which drains liquidity.
-              </div>
-            }
-          />
-
-          {/* CHART 5: Reverse Repo (RRP) */}
-          <DashboardChart 
-            title="Overnight Reverse Repo (RRP)" 
-            data={filteredData.rrp} 
-            color="#f0883e" 
-            formulaBadge="Source: FRED Series RRPONTSYD (Converted from Billions to Millions)"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> Excess cash parked overnight at the Federal Reserve by money market funds and eligible institutions.<br/>
-                <strong>Liquidity Impact (Inverse):</strong> Money sitting in the RRP is idle and removed from active market circulation. When RRP falls, money market funds are deploying that cash back into Treasury bills and private credit markets, <em>boosting</em> net liquidity.
-              </div>
-            }
-          />
-
-          {/* CHART 6: Liquidity Facilities */}
-          <DashboardChart 
-            title="Liquidity & Credit Facilities (H41RESPPALDKNWW)" 
-            data={filteredData.loansFacilities} 
-            color="#58a6ff" 
-            formulaBadge="Source: FRED Series H41RESPPALDKNWW"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> Emergency and specialized Federal Reserve lending programs.<br/>
-                <strong>Liquidity Impact (Direct):</strong> When the Fed extends credit through liquidity facilities, it creates new reserves for commercial banks, directly increasing system liquidity.
-              </div>
-            }
-          />
-
-          {/* CHART 7: Loans Held */}
-          <DashboardChart 
-            title="Loans Held by the Federal Reserve (WLCFLL)" 
-            data={filteredData.loansHeld} 
-            color="#d29922" 
-            formulaBadge="Source: FRED Series WLCFLL"
-            explanation={
-              <div>
-                <strong>What it measures:</strong> Direct loans extended by the Federal Reserve to depository institutions (including Discount Window borrowing and bank term funding).<br/>
-                <strong>Liquidity Impact (Direct):</strong> Increases in loans held inject reserve balances directly into banks experiencing funding stress, adding to net liquidity.
-              </div>
-            }
-          />
-          
-        </div>
+        )}
 
         {/* Footer */}
         <div style={{ 
