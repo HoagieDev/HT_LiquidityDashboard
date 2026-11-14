@@ -122,7 +122,7 @@ def fetch_fred_data():
 def fetch_latest_btc_candles(start_ms):
     """
     Fetches daily BTC-USD candles since start_ms using US-accessible APIs
-    (Coinbase Exchange -> Kraken -> Binance.US fallback) so GitHub Actions US runners never hit HTTP 451.
+    (Coinbase Exchange -> Kraken fallback) so GitHub Actions US runners never hit HTTP 451.
     """
     new_candles = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -140,7 +140,6 @@ def fetch_latest_btc_candles(start_ms):
         r = requests.get(url, params=params, headers=headers, timeout=15)
         if r.status_code == 200:
             for row in r.json():
-                # Coinbase format: [time_sec, low, high, open, close, volume]
                 day_ms = int(row[0]) * 1000
                 close_price = float(row[4])
                 if close_price > 0:
@@ -246,7 +245,6 @@ def build_btc_strategist_data(full_macro_df):
     today_utc = datetime.datetime.now(datetime.timezone.utc)
     today_ms = int(datetime.datetime(today_utc.year, today_utc.month, today_utc.day, tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
-    # Filter out any future placeholder timestamps beyond today_ms
     btc_map = {ms: p for ms, p in btc_map.items() if ms <= today_ms}
     last_ms = max(btc_map.keys())
     live_candles = fetch_latest_btc_candles(last_ms - 5 * ONE_DAY_MS)
@@ -268,7 +266,7 @@ def build_btc_strategist_data(full_macro_df):
 
     # 2. Rolling 200d/4yr Realized Value (MVRV / CBPL proxy) for post-seed dates
     sma_200 = pd.Series(closes).rolling(200, min_periods=20).mean().values
-     sma_1460 = pd.Series(closes).rolling(1460, min_periods=100).mean().values
+    sma_1460 = pd.Series(closes).rolling(1460, min_periods=100).mean().values
     mvrv_raw = np.log(closes / np.maximum(1e-8, 0.5 * sma_200 + 0.5 * sma_1460))
     mvrv_ema = pd.Series(mvrv_raw).ewm(span=7, adjust=False).mean().values
     med_mvrv = np.nanmedian(mvrv_ema)
@@ -283,7 +281,6 @@ def build_btc_strategist_data(full_macro_df):
         if not liq_roc.empty:
             med_l = liq_roc.median()
             mad_l = (liq_roc - med_l).abs().median() or 1e-6
-            # Positive liquidity impulse -> positive buy-side support Z
             liq_z_series = ((liq_roc - med_l) / (1.4826 * mad_l)).clip(-3.0, 3.0)
             for dt_idx, val in liq_z_series.items():
                 liq_z_by_date[dt_idx.strftime('%Y-%m-%d')] = round(float(val), 4)
@@ -310,7 +307,7 @@ def build_btc_strategist_data(full_macro_df):
             "ms": ms,
             "d": dt_str,
             "p": price,
-            "q": [round(v, 2) for v in q],  # [Q1%, Q10%, Q25%, Q50%, Q75%, Q95%, Q99%]
+            "q": [round(v, 2) for v in q],
             "zp": zp,
             "zs": zs,
             "zc": zc,
