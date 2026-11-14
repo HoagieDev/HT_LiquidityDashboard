@@ -4,6 +4,20 @@ import {
 } from 'recharts';
 import BtcStrategist from './BtcStrategist';
 
+// --- PASSCODE CONFIGURATION (SHA-256 HASH) ---
+// Default passcode below is: HOAGIE2026
+// To change it, replace this 64-character SHA-256 hash with your own hash!
+const BTC_PASSCODE_SHA256 = "b8d0a8773a608a5e6106559a1c082a9e0aca62cf320d1aaa8ddf77a4505d62b1";
+const STORAGE_AUTH_KEY = "hoagie_btc_dca_auth_v1";
+
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(String(text).trim());
+  const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
 // --- UTILS ---
 const formatCurrencyAxis = (value) => {
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}T`; // Trillions
@@ -209,12 +223,50 @@ const App = () => {
   const [customEnd, setCustomEnd] = useState('');
   const [showMethodology, setShowMethodology] = useState(false);
 
+  // Passcode Gate State
+  const [btcUnlocked, setBtcUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem(STORAGE_AUTH_KEY) === BTC_PASSCODE_SHA256;
+    } catch (_) {
+      return false;
+    }
+  });
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [passcodeError, setPasscodeError] = useState('');
+  const [showPasscodeText, setShowPasscodeText] = useState(false);
+
   // Mobile viewport listener
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const handlePasscodeSubmit = async (e) => {
+    e.preventDefault();
+    setPasscodeError('');
+    try {
+      const hashed = await sha256Hex(passcodeInput);
+      if (hashed === BTC_PASSCODE_SHA256.toLowerCase()) {
+        setBtcUnlocked(true);
+        setPasscodeInput('');
+        try {
+          localStorage.setItem(STORAGE_AUTH_KEY, BTC_PASSCODE_SHA256.toLowerCase());
+        } catch (_) {}
+      } else {
+        setPasscodeError('Invalid passcode. Please check with Hoagie_Trades for access.');
+      }
+    } catch (err) {
+      setPasscodeError('Browser crypto check failed.');
+    }
+  };
+
+  const handleLockBtcTab = () => {
+    setBtcUnlocked(false);
+    try {
+      localStorage.removeItem(STORAGE_AUTH_KEY);
+    } catch (_) {}
+  };
 
   // 1. Fetch
   useEffect(() => {
@@ -374,8 +426,23 @@ const App = () => {
                   color: dashboardTab === 'btc' ? '#ffffff' : '#f3cd7a'
                 }}
               >
-                ₿ BTC Strategic DCA Signal
+                {btcUnlocked ? '₿ BTC Strategic DCA Signal' : '🔒 BTC Strategic DCA Signal'}
               </button>
+
+              {dashboardTab === 'btc' && btcUnlocked && (
+                <button
+                  onClick={handleLockBtcTab}
+                  title="Lock BTC DCA Tab"
+                  style={{
+                    ...buttonStyle(false),
+                    backgroundColor: '#161b22',
+                    borderColor: '#f85149',
+                    color: '#f85149'
+                  }}
+                >
+                  🔒 Lock
+                </button>
+              )}
 
               {meta?.last_updated && (
                 <span style={{ 
@@ -490,7 +557,105 @@ const App = () => {
 
         {/* Active View Content */}
         {dashboardTab === 'btc' ? (
-          <BtcStrategist />
+          btcUnlocked ? (
+            <BtcStrategist />
+          ) : (
+            /* PASSCODE LOCK SCREEN */
+            <div style={{
+              maxWidth: '440px',
+              margin: isMobile ? '30px auto' : '60px auto',
+              backgroundColor: '#161b22',
+              border: '1px solid #30363d',
+              borderRadius: '10px',
+              padding: isMobile ? '22px 18px' : '30px 28px',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.45)',
+              textAlign: 'center'
+            }}>
+              <div style={{
+                width: '48px',
+                height: '48px',
+                borderRadius: '50%',
+                backgroundColor: 'rgba(243, 205, 122, 0.12)',
+                border: '1px solid #f3cd7a',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                margin: '0 auto 14px',
+                fontSize: '22px'
+              }}>
+                🔒
+              </div>
+              <h2 style={{ margin: '0 0 8px', fontSize: '18px', color: '#e6edf3' }}>
+                Protected Strategy Access
+              </h2>
+              <p style={{ margin: '0 0 18px', fontSize: '13px', color: '#8b949e', lineHeight: 1.5 }}>
+                Enter the private access passcode from <strong style={{ color: '#58a6ff' }}>Hoagie_Trades</strong> to unlock the BTC Strategic Dollar Cost Averaging Signal & Backtester.
+              </p>
+
+              <form onSubmit={handlePasscodeSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPasscodeText ? 'text' : 'password'}
+                    value={passcodeInput}
+                    onChange={(e) => { setPasscodeInput(e.target.value); setPasscodeError(''); }}
+                    placeholder="Enter access passcode..."
+                    autoFocus
+                    style={{
+                      width: '100%',
+                      padding: '10px 70px 10px 12px',
+                      backgroundColor: '#0d1117',
+                      border: `1px solid ${passcodeError ? '#f85149' : '#30363d'}`,
+                      borderRadius: '6px',
+                      color: '#e6edf3',
+                      fontSize: '14px',
+                      fontFamily: 'monospace',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPasscodeText(!showPasscodeText)}
+                    style={{
+                      position: 'absolute',
+                      right: '8px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      background: 'none',
+                      border: 'none',
+                      color: '#8b949e',
+                      fontSize: '11px',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                  >
+                    {showPasscodeText ? 'HIDE' : 'SHOW'}
+                  </button>
+                </div>
+
+                {passcodeError && (
+                  <div style={{ color: '#f85149', fontSize: '12px', textAlign: 'left' }}>
+                    ⚠️ {passcodeError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  style={{
+                    padding: '10px 16px',
+                    backgroundColor: '#238636',
+                    color: '#ffffff',
+                    border: '1px solid rgba(240,246,252,0.1)',
+                    borderRadius: '6px',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Unlock BTC Strategic Signal
+                </button>
+              </form>
+            </div>
+          )
         ) : (
           <div style={{ 
             display: 'grid', 
