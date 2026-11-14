@@ -35,8 +35,8 @@ jobs:
         run: python scripts/fetch_data.py
 
       # 3. Commit the new data.json and btc_data.json
-       - name: Commit Data Update
-         run: |
+      - name: Commit Data Update
+        run: |
            git config --global user.name 'LiquidityBot'
            git config --global user.email 'bot@noreply.github.com'
            git add public/data.json public/btc_data.json
