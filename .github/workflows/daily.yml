@@ -34,14 +34,14 @@ jobs:
       - name: Fetch FRED Data
         run: python scripts/fetch_data.py
 
-      # 3. Commit the new data.json
-      - name: Commit Data Update
-        run: |
-          git config --global user.name 'LiquidityBot'
-          git config --global user.email 'bot@noreply.github.com'
-          git add public/data.json public/btc_data.json
-          git commit -m "Auto-update liquidity data" || exit 0
-          git push
+      # 3. Commit the new data.json and btc_data.json
+       - name: Commit Data Update
+         run: |
+           git config --global user.name 'LiquidityBot'
+           git config --global user.email 'bot@noreply.github.com'
+           git add public/data.json public/btc_data.json
+           git commit -m "Auto-update liquidity and BTC DCA data" || exit 0
+           git push
 
       # 4. Build the React Website
       - name: Set up Node.js
