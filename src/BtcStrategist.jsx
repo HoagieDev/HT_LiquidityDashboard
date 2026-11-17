@@ -34,6 +34,41 @@ const BAND_DEFS = [
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const safeLog10 = (v) => (isFinite(v) && v > 0 ? Math.log10(v) : null);
 
+/**
+ * Re-smooths a causal EMA series from its baked-in baseSpan (e.g. 7d or 14d)
+ * to any user-selected targetSpan (e.g. 1d raw up to 90d).
+ */
+function reSmoothCausalEma(values, baseSpan, targetSpan) {
+  const bSpan = Math.max(1, Number(baseSpan) || 1);
+  const tSpan = clamp(Math.round(Number(targetSpan) || bSpan), 1, 120);
+  if (bSpan === tSpan) return values.slice();
+
+  const aBase = 2 / (bSpan + 1);
+  const aTarget = 2 / (tSpan + 1);
+  const out = new Array(values.length).fill(null);
+
+  let prevBaked = null;
+  let emaVal = null;
+
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    if (v === null || v === undefined || !isFinite(v)) {
+      out[i] = null;
+      continue;
+    }
+    // Invert base EMA step to recover raw daily impulse, clamped to [-3.5, 3.5] to prevent spike noise
+    const rawStep = prevBaked === null
+      ? v
+      : clamp((v - (1 - aBase) * prevBaked) / aBase, -3.5, 3.5);
+    prevBaked = v;
+
+    // Apply target causal EMA
+    emaVal = emaVal === null ? v : aTarget * rawStep + (1 - aTarget) * emaVal;
+    out[i] = clamp(emaVal, -3, 3);
+  }
+  return out;
+}
+
 const usdShort = (v) => {
   if (!isFinite(v)) return "—";
   if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
@@ -137,7 +172,8 @@ const BtcStrategistInner = () => {
   const [liveStatus, setLiveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('rainbow');
   const [showInfo, setShowInfo] = useState(false);
-  const [showZLine, setShowZLine] = useState(true);
+  // Default Z-score line to OFF as requested
+  const [showZLine, setShowZLine] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 960 : false);
 
   // Fine-tuned Timeframe State
@@ -145,14 +181,18 @@ const BtcStrategistInner = () => {
   const [customStart, setCustomStart] = useState('2017-01-01');
   const [customEnd, setCustomEnd] = useState('');
 
-  // Indicator toggles
+  // Indicator toggles (4 core BTC indicators; prevents unchecking all 4)
   const [indicators, setIndicators] = useState({
     price: true,
     cbpl: true,
     onchain: true,
-    sharpe: false,
-    liquidity: false
+    sharpe: false
   });
+  const [minToggleWarn, setMinToggleWarn] = useState(false);
+
+  // Adjustable EMA Spans (in days) for each indicator
+  const DEFAULT_EMAS = { price: 1, cbpl: 7, onchain: 7, sharpe: 14 };
+  const [emaSpans, setEmaSpans] = useState(DEFAULT_EMAS);
 
   const [todayCash, setTodayCash] = useState(10000);
 
@@ -169,6 +209,20 @@ const BtcStrategistInner = () => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  const handleToggleIndicator = (key, checked) => {
+    setIndicators(prev => {
+      const activeCount = Object.values(prev).filter(Boolean).length;
+      // Prevent unchecking the last remaining active indicator so Composite Risk never crashes
+      if (!checked && activeCount <= 1) {
+        setMinToggleWarn(true);
+        setTimeout(() => setMinToggleWarn(false), 2500);
+        return prev;
+      }
+      setMinToggleWarn(false);
+      return { ...prev, [key]: checked };
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -212,8 +266,7 @@ const BtcStrategistInner = () => {
                   zp: priceZScore(p, q[0], q[3], q[6]),
                   zs: getZ(seed.sharpe, ms),
                   zc: getZ(seed.cbpl, ms),
-                  zo: getZ(seed.onchain, ms),
-                  zl: null
+                  zo: getZ(seed.onchain, ms)
                 };
               });
           }
@@ -241,8 +294,7 @@ const BtcStrategistInner = () => {
               zp: priceZScore(livePrice, q[0], q[3], q[6]),
               zs: prev.zs,
               zc: prev.zc,
-              zo: prev.zo,
-              zl: prev.zl
+              zo: prev.zo
             };
             if (prev.d === todayStr) {
               records = [...records.slice(0, -1), updatedRow];
@@ -298,48 +350,64 @@ const BtcStrategistInner = () => {
     setCustomEnd(lastDateStr);
   };
 
+  // 2. Compute EMA-adjusted indicator series, Composite Z-score, and Composite Risk
   const series = useMemo(() => {
-    return rawRecords
-      .filter(r => r && Array.isArray(r.q) && r.q.length === 7 && isFinite(r.p) && r.p > 0)
-      .map(r => {
-        const votes = [];
-        if (indicators.price) votes.push(r.zp);
-        if (indicators.cbpl) votes.push(r.zc);
-        if (indicators.onchain) votes.push(r.zo);
-        if (indicators.sharpe) votes.push(r.zs);
-        if (indicators.liquidity) votes.push(r.zl);
+    const valid = rawRecords.filter(r => r && Array.isArray(r.q) && r.q.length === 7 && isFinite(r.p) && r.p > 0);
+    if (!valid.length) return [];
 
-        let compZ = NaN;
-        if (votes.length > 0 && votes.every(v => v !== null && v !== undefined && isFinite(v))) {
-          compZ = clamp(votes.reduce((a, b) => a + Number(b), 0) / votes.length, -3, 3);
-        }
-        const compRisk = isFinite(compZ) ? clamp(50 - (compZ / 3) * 50, 0, 100) : NaN;
-        const eqmRisk = eqmRiskFromPrice(r.p, r.q);
+    // Re-smooth each indicator from its baked-in base EMA span to the user's selected EMA span
+    const zpArr = reSmoothCausalEma(valid.map(r => r.zp), 1, emaSpans.price);
+    const zcArr = reSmoothCausalEma(valid.map(r => r.zc), 7, emaSpans.cbpl);
+    const zoArr = reSmoothCausalEma(valid.map(r => r.zo), 7, emaSpans.onchain);
+    const zsArr = reSmoothCausalEma(valid.map(r => r.zs), 14, emaSpans.sharpe);
 
-        return {
-          ...r,
-          q01: r.q[0],
-          q10: r.q[1],
-          q25: r.q[2],
-          q50: r.q[3],
-          q75: r.q[4],
-          q95: r.q[5],
-          q99: r.q[6],
-          logP: safeLog10(r.p),
-          logQ01: safeLog10(r.q[0]),
-          logQ10: safeLog10(r.q[1]),
-          logQ25: safeLog10(r.q[2]),
-          logQ50: safeLog10(r.q[3]),
-          logQ75: safeLog10(r.q[4]),
-          logQ95: safeLog10(r.q[5]),
-          logQ99: safeLog10(r.q[6]),
-          compZ: isFinite(compZ) ? Number(compZ.toFixed(2)) : null,
-          compRisk: isFinite(compRisk) ? Number(compRisk.toFixed(2)) : null,
-          zMappedToRiskAxis: isFinite(compZ) ? Number(((compZ + 3) / 6 * 100).toFixed(2)) : null,
-          eqmRisk
-        };
-      });
-  }, [rawRecords, indicators]);
+    return valid.map((r, i) => {
+      const zp = zpArr[i];
+      const zc = zcArr[i];
+      const zo = zoArr[i];
+      const zs = zsArr[i];
+
+      const votes = [];
+      if (indicators.price) votes.push(zp);
+      if (indicators.cbpl) votes.push(zc);
+      if (indicators.onchain) votes.push(zo);
+      if (indicators.sharpe) votes.push(zs);
+
+      let compZ = NaN;
+      if (votes.length > 0 && votes.every(v => v !== null && v !== undefined && isFinite(v))) {
+        compZ = clamp(votes.reduce((a, b) => a + Number(b), 0) / votes.length, -3, 3);
+      }
+      const compRisk = isFinite(compZ) ? clamp(50 - (compZ / 3) * 50, 0, 100) : NaN;
+      const eqmRisk = eqmRiskFromPrice(r.p, r.q);
+
+      return {
+        ...r,
+        zp,
+        zc,
+        zo,
+        zs,
+        q01: r.q[0],
+        q10: r.q[1],
+        q25: r.q[2],
+        q50: r.q[3],
+        q75: r.q[4],
+        q95: r.q[5],
+        q99: r.q[6],
+        logP: safeLog10(r.p),
+        logQ01: safeLog10(r.q[0]),
+        logQ10: safeLog10(r.q[1]),
+        logQ25: safeLog10(r.q[2]),
+        logQ50: safeLog10(r.q[3]),
+        logQ75: safeLog10(r.q[4]),
+        logQ95: safeLog10(r.q[5]),
+        logQ99: safeLog10(r.q[6]),
+        compZ: isFinite(compZ) ? Number(compZ.toFixed(2)) : null,
+        compRisk: isFinite(compRisk) ? Number(compRisk.toFixed(2)) : null,
+        zMappedToRiskAxis: isFinite(compZ) ? Number(((compZ + 3) / 6 * 100).toFixed(2)) : null,
+        eqmRisk
+      };
+    });
+  }, [rawRecords, indicators, emaSpans]);
 
   const latestRow = useMemo(() => {
     for (let i = series.length - 1; i >= 0; i--) {
@@ -357,9 +425,6 @@ const BtcStrategistInner = () => {
     return sliced.filter((_, idx) => idx % step === 0 || idx === sliced.length - 1);
   }, [series, customStart, customEnd, isMobile]);
 
-  // Dynamic gradient stops calibrated to the exact visible min/max compRisk in chartData!
-  // This guarantees that 25%, 50%, and 75% Risk ALWAYS switch colors at the exact threshold lines
-  // regardless of whether you are zoomed into 1M, 3M, 1Y, or ALL!
   const riskGradientStops = useMemo(() => {
     const vals = chartData.map(d => d.compRisk).filter(v => v !== null && isFinite(v));
     if (!vals.length) {
@@ -371,7 +436,6 @@ const BtcStrategistInner = () => {
     const minR = Math.min(...vals);
     const maxR = Math.max(...vals);
 
-    // If the entire visible line is flat or inside a single zone, return that zone's solid color
     if (maxR - minR < 1e-4) {
       const c = riskZoneColor(maxR);
       return [
@@ -380,7 +444,6 @@ const BtcStrategistInner = () => {
       ];
     }
 
-    // SVG y=0% is the top of the line's bounding box (maxR), y=100% is the bottom (minR)
     const offsetForRisk = (rVal) => `${clamp(((maxR - rVal) / (maxR - minR)) * 100, 0, 100).toFixed(2)}%`;
 
     return [
@@ -595,7 +658,7 @@ const BtcStrategistInner = () => {
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: isMobile ? '1fr' : '340px minmax(0, 1fr)',
+      gridTemplateColumns: isMobile ? '1fr' : '350px minmax(0, 1fr)',
       gap: isMobile ? '14px' : '20px',
       alignItems: 'start'
     }}>
@@ -689,35 +752,86 @@ const BtcStrategistInner = () => {
           ))}
         </div>
 
-        {/* Composite Indicator Toggles */}
+        {/* Composite Indicator Toggles + Adjustable EMA Settings */}
         <div style={cardStyle}>
-          <div style={{ fontSize: '11px', fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#58a6ff', marginBottom: '6px', fontWeight: 700 }}>
-            Composite Signal Inputs
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <div style={{ fontSize: '11px', fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#58a6ff', fontWeight: 700 }}>
+              Composite Signal & EMA Settings
+            </div>
+            <button
+              type="button"
+              onClick={() => setEmaSpans(DEFAULT_EMAS)}
+              style={{
+                background: '#21262d', border: '1px solid #30363d', color: '#8b949e',
+                borderRadius: '4px', padding: '2px 7px', fontSize: '10px', cursor: 'pointer', fontFamily: 'monospace'
+              }}
+            >
+              Reset EMAs
+            </button>
           </div>
-          <p style={{ fontSize: '12px', color: '#8b949e', margin: '0 0 10px', lineHeight: 1.4 }}>
-            Toggle which Z-scores blend into Composite Risk (equal-weighted vote):
+          <p style={{ fontSize: '12px', color: '#8b949e', margin: '0 0 8px', lineHeight: 1.4 }}>
+            Toggle indicators and adjust their causal EMA smoothing window (1d–90d):
           </p>
+
+          {minToggleWarn && (
+            <div style={{
+              backgroundColor: 'rgba(248, 81, 73, 0.12)', border: '1px solid #f85149',
+              color: '#ff7b72', padding: '6px 8px', borderRadius: '5px', fontSize: '11.5px', marginBottom: '8px'
+            }}>
+              ⚠️ At least 1 indicator must remain active to compute Composite Risk.
+            </div>
+          )}
+
           {[
             ['price', 'Asymmetric Tail Curvature (Price)', latestRow?.zp],
-            ['cbpl', 'Cost Basis P/L Ratio (7d EMA)', latestRow?.zc],
-            ['onchain', 'Onchain Risk Composite (7d EMA)', latestRow?.zo],
-            ['sharpe', 'Realized P/L Sharpe (14d EMA)', latestRow?.zs],
-            ['liquidity', 'Hoagie Net Fed Liquidity Impulse', latestRow?.zl]
-          ].map(([key, label, zVal]) => (
-            <label key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: '12.5px', cursor: 'pointer', borderBottom: '1px solid #21262d' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="checkbox"
-                  checked={indicators[key]}
-                  disabled={key === 'liquidity' && (zVal === null || zVal === undefined)}
-                  onChange={(e) => setIndicators(prev => ({ ...prev, [key]: e.target.checked }))}
-                />
-                {label}
-              </span>
-              <span style={{ fontFamily: 'monospace', color: '#8b949e', fontSize: '11px' }}>
-                {zVal !== null && zVal !== undefined && isFinite(zVal) ? `Z: ${zVal > 0 ? '+' : ''}${Number(zVal).toFixed(2)}` : 'N/A'}
-              </span>
-            </label>
+            ['cbpl', 'Cost Basis P/L Ratio', latestRow?.zc],
+            ['onchain', 'Onchain Risk Composite', latestRow?.zo],
+            ['sharpe', 'Realized P/L Sharpe', latestRow?.zs]
+          ].map(([key, label, zVal], i) => (
+            <div key={key} style={{ padding: '8px 0', borderBottom: i < 3 ? '1px solid #21262d' : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e6edf3' }}>
+                  <input
+                    type="checkbox"
+                    checked={indicators[key]}
+                    onChange={(e) => handleToggleIndicator(key, e.target.checked)}
+                  />
+                  {label}
+                </label>
+                <span style={{ fontFamily: 'monospace', color: '#79c0ff', fontSize: '11px', fontWeight: 600 }}>
+                  {zVal !== null && zVal !== undefined && isFinite(zVal) ? `Z: ${zVal > 0 ? '+' : ''}${Number(zVal).toFixed(2)}` : 'N/A'}
+                </span>
+              </div>
+
+              {/* Adjustable EMA Day Control */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', paddingLeft: '22px', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: '#8b949e', fontFamily: 'monospace' }}>
+                  EMA Smoothing: <strong style={{ color: '#c9d1d9' }}>{emaSpans[key]}d</strong> {emaSpans[key] === 1 ? '(Raw)' : ''}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <input
+                    type="range"
+                    min="1"
+                    max="60"
+                    value={emaSpans[key]}
+                    onChange={(e) => setEmaSpans(prev => ({ ...prev, [key]: clamp(Number(e.target.value) || 1, 1, 120) }))}
+                    style={{ width: '85px', accentColor: '#58a6ff', cursor: 'pointer' }}
+                  />
+                  <input
+                    type="number"
+                    min="1"
+                    max="120"
+                    value={emaSpans[key]}
+                    onChange={(e) => setEmaSpans(prev => ({ ...prev, [key]: clamp(Number(e.target.value) || 1, 1, 120) }))}
+                    style={{
+                      width: '46px', padding: '2px 4px', backgroundColor: '#0d1117',
+                      border: '1px solid #30363d', borderRadius: '4px', color: '#e6edf3',
+                      fontFamily: 'monospace', fontSize: '11px', textAlign: 'center'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
           ))}
         </div>
 
@@ -865,13 +979,12 @@ const BtcStrategistInner = () => {
               <strong style={{ color: '#22c55e', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
                 2. Composite Z-Score & Valuation Risk %
               </strong>
-              Each enabled indicator in the left sidebar casts an equal-weighted vote in <code>[-3, +3]</code> (where <code>+Z</code> = undervalued/buy and <code>-Z</code> = overvalued/sell):
+              Each enabled indicator in the left sidebar casts an equal-weighted vote in <code>[-3, +3]</code> (where <code>+Z</code> = undervalued/buy and <code>-Z</code> = overvalued/sell) with customizable causal EMA smoothing:
               <ul style={{ margin: '6px 0', paddingLeft: '18px', fontSize: '12px' }}>
-                <li><strong>Price Valuation (RAQQR):</strong> Position within the Q1%–Q99% log-time rainbow.</li>
-                <li><strong>Cost Basis P/L Ratio (7d EMA):</strong> Log ratio of total unrealized profit to unrealized loss across the UTXO cost-basis histogram (expanding robust Z-score).</li>
-                <li><strong>Onchain Risk Composite (7d EMA):</strong> Weighted blend of 8 on-chain percentile metrics (MVRV, MVRV Z, NUPL, Puell, LTH PVR, Supply P/L).</li>
-                <li><strong>Realized P/L Sharpe (14d EMA):</strong> Full-history percentile rank of rolling realized P/L Sharpe.</li>
-                <li><strong>Hoagie Net Liquidity Impulse:</strong> 90-day rate-of-change of Net Fed Liquidity (WALCL − TGA − RRP + Facilities).</li>
+                <li><strong>Price Valuation (RAQQR):</strong> Position within the Q1%–Q99% log-time rainbow (default 1d).</li>
+                <li><strong>Cost Basis P/L Ratio:</strong> Log ratio of total unrealized profit to unrealized loss across the UTXO cost-basis histogram (default 7d EMA).</li>
+                <li><strong>Onchain Risk Composite:</strong> Weighted blend of 8 on-chain percentile metrics (MVRV, MVRV Z, NUPL, Puell, LTH PVR, Supply P/L; default 7d EMA).</li>
+                <li><strong>Realized P/L Sharpe:</strong> Full-history percentile rank of rolling realized P/L Sharpe (default 14d EMA).</li>
               </ul>
               <code style={{ color: '#79c0ff', display: 'block', marginTop: '4px', fontSize: '11.5px' }}>
                 Composite Risk % = clamp(50 - (Composite_Z / 3) × 50, 0, 100)
@@ -932,7 +1045,7 @@ const BtcStrategistInner = () => {
           </div>
         )}
 
-        {/* TAB 2: COMPOSITE RISK & Z-SCORE (Exact Threshold Color Locking across all zoom levels) */}
+        {/* TAB 2: COMPOSITE RISK & Z-SCORE */}
         {activeTab === 'composite' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px', flexWrap: 'wrap', gap: '10px' }}>
@@ -966,8 +1079,6 @@ const BtcStrategistInner = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 10, right: isMobile ? 5 : 20, left: 0, bottom: 5 }}>
                   <defs>
-                    {/* Dynamically calibrated to [minR, maxR] of chartData so 25%, 50%, and 75%
-                        thresholds NEVER shift colors when zooming into 1M / 3M / 1Y / ALL */}
                     <linearGradient id="compRiskZoneGrad" x1="0" y1="0" x2="0" y2="1">
                       {riskGradientStops.map((s, idx) => (
                         <stop key={idx} offset={s.offset} stopColor={s.color} />
