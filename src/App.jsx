@@ -5,10 +5,9 @@ import {
 import BtcStrategist from './BtcStrategist';
 
 // --- PASSCODE CONFIGURATION (SHA-256 HASH) ---
-// Default passcode below is: HOAGIE2026
-// To change it, replace this 64-character SHA-256 hash with your own hash!
-const BTC_PASSCODE_SHA256 = "b8d0a8773a608a5e6106559a1c082a9e0aca62cf320d1aaa8ddf77a4505d62b1";
-const STORAGE_AUTH_KEY = "hoagie_btc_dca_auth_v1";
+// Current passcode is: HoagieTrades2026
+const BTC_PASSCODE_SHA256 = "9d065da1ce85769aa864758ef29e6ca1ff500c6aa5c4a7b249e2605d5f476db5";
+const STORAGE_AUTH_KEY = "hoagie_btc_dca_auth_v2";
 
 async function sha256Hex(text) {
   const data = new TextEncoder().encode(String(text).trim());
