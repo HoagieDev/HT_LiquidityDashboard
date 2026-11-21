@@ -10,18 +10,26 @@ import pandas_datareader.data as web
 
 # --- CONFIGURATION ---
 START_DATE = '2023-01-01'
-FRED_START_DATE = '2022-01-01'  # 1-year lookback so YoY % is ready on 2023-01-01
+FRED_START_DATE = '2022-01-01'
 TODAY = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
 
 ONE_DAY_MS = 86400000
 RAQQR_GENESIS_MS = int(datetime.datetime(2009, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+RAQQR_KEYS = ["0.01", "0.1", "0.25", "0.5", "0.75", "0.95", "0.99"]
+RAQQR_COEF = {
+    "0.01": (2.837, 2.578, -0.0241),
+    "0.1":  (2.933, 2.552, -0.0241),
+    "0.25": (3.004, 2.554, -0.0241),
+    "0.5":  (3.214, 2.482, -0.1126),
+    "0.75": (3.562, 2.283, -0.3259),
+    "0.95": (3.897, 1.964, -0.3259),
+    "0.99": (4.028, 1.904, -0.3259),
+}
 
 def safe_round(val, decimals=4):
-    """Safely rounds floats for JSON, converting NaNs to None (null)."""
     if val is None or pd.isna(val) or math.isnan(val) or np.isnan(val):
         return None
     return round(float(val), decimals)
-
 
 def fetch_treasury_tga():
     base_url = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance"
@@ -32,7 +40,6 @@ def fetch_treasury_tga():
         'sort': '-record_date'
     }
     headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
-
     print(f"Fetching TGA from: {base_url} ...")
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=20)
@@ -59,7 +66,6 @@ def fetch_treasury_tga():
     except Exception as e:
         print(f"Error fetching Treasury API: {e}")
         return pd.DataFrame()
-
 
 def fetch_fred_data():
     print("Fetching FRED Data (Liquidity + Composite Inflation)...")
@@ -98,11 +104,9 @@ def fetch_fred_data():
 
     return combined_df
 
-
 def fetch_latest_btc_candles(start_ms):
     new_candles = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
-
     try:
         start_dt = datetime.datetime.fromtimestamp(start_ms / 1000, tz=datetime.timezone.utc)
         end_dt = datetime.datetime.now(datetime.timezone.utc)
@@ -142,9 +146,7 @@ def fetch_latest_btc_candles(start_ms):
 
     return new_candles
 
-
 def fetch_blockchain_metrics(sorted_ms):
-    """Fetches Hash Rate and Tx Volume from Blockchain.info, aligning to our UTC dates."""
     metrics = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
     base_index = pd.to_datetime([datetime.datetime.fromtimestamp(m/1000, tz=datetime.timezone.utc) for m in sorted_ms]).floor('D')
@@ -170,15 +172,15 @@ def fetch_blockchain_metrics(sorted_ms):
 
     return metrics
 
-
-def price_z_score(price, q01, q50, q99):
-    if price <= 0 or not (q01 < q50 < q99):
-        return None
-    lp, ll, lm, lh = math.log(price), math.log(q01), math.log(q50), math.log(q99)
-    if lp <= lm:
-        return max(0.0, min(3.0, 3.0 * (lm - lp) / max(1e-12, lm - ll)))
-    return max(-3.0, min(0.0, -3.0 * (lp - lm) / max(1e-12, lh - lm)))
-
+def raqqr_quantiles_at_ms(ms):
+    t = max(1, round((ms - RAQQR_GENESIS_MS) / ONE_DAY_MS))
+    x = math.log(t) - RAQQR_MU
+    raw = []
+    for k in RAQQR_KEYS:
+        c, a, b = RAQQR_COEF[k]
+        raw.append(10 ** (c + a * x + b * x * x))
+    raw.sort()
+    return raw
 
 def build_btc_strategist_data(full_macro_df):
     print("Building BTC Strategic DCA dataset...")
@@ -234,25 +236,29 @@ def build_btc_strategist_data(full_macro_df):
     sorted_ms = sorted(btc_map.keys())
     closes = np.array([btc_map[ms] for ms in sorted_ms], dtype=float)
 
-    # 1. Walk-Forward Power Law (Dynamic Quadratic Quantile Regression)
-    # Eradicates lookahead bias by fitting only on data available up to day i.
+    # 1. Walk-Forward Power Law & Static Power Law
     print("Running Walk-Forward Power Law Regression...")
     x_days = np.array([max(1, (m - RAQQR_GENESIS_MS)/ONE_DAY_MS) for m in sorted_ms])
     x_log = np.log(x_days)
     y_log = np.log10(closes)
 
-    q_out = np.zeros((len(sorted_ms), 7))
+    q_wf_out = np.zeros((len(sorted_ms), 7))
+    q_static_out = np.zeros((len(sorted_ms), 7))
+
     for i in range(len(sorted_ms)):
+        # Original Static Model
+        q_static_out[i] = raqqr_quantiles_at_ms(sorted_ms[i])
+        
+        # New Walk-Forward Model (needs at least a year of data to fit reliably)
         if i < 365:
-            q_out[i] = [closes[i]*0.3, closes[i]*0.4, closes[i]*0.6, closes[i], closes[i]*1.5, closes[i]*2.5, closes[i]*4.0]
-            continue
-        # Quadratic fit on historical subset
-        p = np.polyfit(x_log[:i+1], y_log[:i+1], 2)
-        preds = np.polyval(p, x_log[:i+1])
-        residuals = y_log[:i+1] - preds
-        pcts = np.percentile(residuals, [1, 10, 25, 50, 75, 95, 99])
-        today_pred = np.polyval(p, x_log[i])
-        q_out[i, :] = 10**(today_pred + pcts)
+            q_wf_out[i] = q_static_out[i]
+        else:
+            p = np.polyfit(x_log[:i+1], y_log[:i+1], 2)
+            preds = np.polyval(p, x_log[:i+1])
+            residuals = y_log[:i+1] - preds
+            pcts = np.percentile(residuals, [1, 10, 25, 50, 75, 95, 99])
+            today_pred = np.polyval(p, x_log[i])
+            q_wf_out[i, :] = 10**(today_pred + pcts)
 
     # 2. Extract new on-chain and derivative proxies
     bc_metrics = fetch_blockchain_metrics(sorted_ms)
@@ -287,18 +293,6 @@ def build_btc_strategist_data(full_macro_df):
     else:
         zn_arr = np.full(len(closes), np.nan)
 
-    # 2D. Hoagie Net Liquidity Impulse (zl)
-    liq_z_by_date = {}
-    if full_macro_df is not None and 'Net_Liquidity' in full_macro_df.columns:
-        liq_s = full_macro_df['Net_Liquidity'].dropna()
-        liq_roc = liq_s.pct_change(90).ewm(span=7, adjust=False).mean().dropna()
-        if not liq_roc.empty:
-            med_l = liq_roc.median()
-            mad_l = (liq_roc - med_l).abs().median() or 1e-6
-            liq_z_series = ((liq_roc - med_l) / (1.4826 * mad_l)).clip(-3.0, 3.0)
-            for dt_idx, val in liq_z_series.items():
-                liq_z_by_date[dt_idx.strftime('%Y-%m-%d')] = float(val)
-
     # 3. Post-Seed Proxies for CBPL/Onchain/Sharpe
     log_ret = np.diff(np.log(closes), prepend=np.log(closes[0]))
     ret_s = pd.Series(log_ret)
@@ -326,23 +320,24 @@ def build_btc_strategist_data(full_macro_df):
     for i, ms in enumerate(sorted_ms):
         price = closes[i]
         dt_str = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
-        q = q_out[i]
-        zp = price_z_score(price, q[0], q[3], q[6])
+        
+        # Save both arrays explicitly so the UI can hot-swap them
+        q_stat = q_static_out[i]
+        q_wf = q_wf_out[i]
+        
         zs = lookup_seed_or_proxy(sharpe_start, sharpe_vals, ms, sharpe_proxy_z[i])
         zc = lookup_seed_or_proxy(cbpl_start, cbpl_vals, ms, onchain_proxy_z[i])
         zo = lookup_seed_or_proxy(onchain_start, onchain_vals, ms, onchain_proxy_z[i])
-        zl = liq_z_by_date.get(dt_str, None)
 
         records.append({
             "ms": ms,
             "d": dt_str,
             "p": safe_round(price, 2),
-            "q": [safe_round(v, 2) for v in q],
-            "zp": safe_round(zp),
+            "q_static": [safe_round(v, 2) for v in q_stat],
+            "q_wf": [safe_round(v, 2) for v in q_wf],
             "zs": safe_round(zs),
             "zc": safe_round(zc),
             "zo": safe_round(zo),
-            "zl": safe_round(zl),
             "zf": safe_round(zf_arr[i]),
             "zh": safe_round(zh_arr[i]),
             "zn": safe_round(zn_arr[i])
@@ -355,7 +350,7 @@ def build_btc_strategist_data(full_macro_df):
     }
     with open('public/btc_data.json', 'w', encoding='utf-8') as f:
         json.dump(out_payload, f, separators=(',', ':'))
-    print(f"Saved {len(records)} daily BTC records to public/btc_data.json (through {out_payload['last_updated']}).")
+    print(f"Saved {len(records)} daily BTC records to public/btc_data.json.")
 
 
 def main():
@@ -419,7 +414,6 @@ def main():
     output_df = output_df.rename(columns={'Final_TGA': 'TGA_Daily'})
     output_df.to_json('public/data.json', orient='records')
     print("Done! Macro Data updated.")
-
 
 if __name__ == "__main__":
     main()
