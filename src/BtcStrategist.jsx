@@ -5,22 +5,9 @@ import {
 } from 'recharts';
 
 const ONE_DAY = 86400000;
-const RAQQR_MU = 7.9914;
-const RAQQR_GENESIS = Date.UTC(2009, 0, 1);
-const RAQQR_KEYS = ["0.01", "0.1", "0.25", "0.5", "0.75", "0.95", "0.99"];
-const RAQQR_RISK_MARKS = [1, 10, 25, 50, 75, 95, 99];
-const RAQQR_COEF = {
-  "0.01": [2.837, 2.578, -0.0241],
-  "0.1":  [2.933, 2.552, -0.0241],
-  "0.25": [3.004, 2.554, -0.0241],
-  "0.5":  [3.214, 2.482, -0.1126],
-  "0.75": [3.562, 2.283, -0.3259],
-  "0.95": [3.897, 1.964, -0.3259],
-  "0.99": [4.028, 1.904, -0.3259]
-};
-
 const CURVE_RISK_NODES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
 const CURVE_DEFAULT_VALUES = [10, 10, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.5, -2, -4, -10];
+const RAQQR_RISK_MARKS = [1, 10, 25, 50, 75, 95, 99];
 
 const BAND_DEFS = [
   { loIdx: 0, hiIdx: 1, name: "1–10% · Fire Sale", color: "#1f6feb" },
@@ -53,7 +40,7 @@ function exportChartAsPNG(containerId, fileName) {
   const ctx = canvas.getContext('2d');
   
   ctx.scale(scale, scale);
-  ctx.fillStyle = '#0d1117'; // Match your GitHub dark theme background
+  ctx.fillStyle = '#0d1117';
   ctx.fillRect(0, 0, svgSize.width, svgSize.height);
   
   const img = new Image();
@@ -111,16 +98,6 @@ const usdExact = (v) => {
   if (!isFinite(v)) return "—";
   return "$" + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
-
-function raqqrPricesAtMs(ms) {
-  const t = Math.max(1, Math.round((ms - RAQQR_GENESIS) / ONE_DAY));
-  const x = Math.log(t) - RAQQR_MU;
-  const raw = RAQQR_KEYS.map(k => {
-    const [c, a, b] = RAQQR_COEF[k];
-    return Math.pow(10, c + a * x + b * x * x);
-  });
-  return raw.slice().sort((a, b) => a - b);
-}
 
 function priceZScore(price, lowRail, mid, highRail) {
   if (!isFinite(price) || price <= 0 || !(lowRail < mid && mid < highRail)) return NaN;
@@ -203,30 +180,34 @@ const BtcStrategistInner = () => {
   const [liveStatus, setLiveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('rainbow');
   const [showInfo, setShowInfo] = useState(false);
+  
+  // Z-Score Line Defaulted Off
   const [showZLine, setShowZLine] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 960 : false);
 
-  // Fine-tuned Timeframe State
   const [tfPreset, setTfPreset] = useState('2017');
   const [customStart, setCustomStart] = useState('2017-01-01');
   const [customEnd, setCustomEnd] = useState('');
 
-  // Fixed defaults: Asymmetric & Onchain = true, CBPL & Sharpe = false
+  // Fixed Defaults (Price & Onchain = True)
   const [indicators, setIndicators] = useState({
     price: true,
     cbpl: false,
     onchain: true,
-    sharpe: false
+    sharpe: false,
+    froth: false,
+    hash: false,
+    nvt: false,
+    liquidity: false
   });
   const [minToggleWarn, setMinToggleWarn] = useState(false);
 
-  // Adjusted EMAs: 1D for Price, 14D for CBPL, Onchain, Sharpe
-  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14 };
+  // Fixed Default EMAs (1D Price, 14D Everything Else)
+  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14, froth: 14, hash: 14, nvt: 14, liquidity: 14 };
   const [emaSpans, setEmaSpans] = useState(DEFAULT_EMAS);
 
   const [todayCash, setTodayCash] = useState(10000);
 
-  // Backtest & Curve State
   const [curveNodes, setCurveNodes] = useState(CURVE_DEFAULT_VALUES.slice());
   const [btStartDate, setBtStartDate] = useState('2018-01-01');
   const [btStartingCash, setBtStartingCash] = useState(10000);
@@ -270,40 +251,7 @@ const BtcStrategistInner = () => {
         }
       } catch (_) {}
 
-      if (!records.length) {
-        try {
-          const res = await fetch('./btc_seed.json');
-          if (res.ok) {
-            const seed = await res.json();
-            const getZ = (ind, ms) => {
-              if (!ind || !Array.isArray(ind.values)) return null;
-              const idx = Math.round((ms - ind.start) / ONE_DAY);
-              if (idx >= 0 && idx < ind.values.length) return ind.values[idx];
-              if (idx >= ind.values.length && idx - (ind.values.length - 1) <= 7) return ind.values[ind.values.length - 1];
-              return null;
-            };
-            const nowMs = Date.now();
-            records = (seed.btc || [])
-              .filter(([ms, p]) => ms <= nowMs + ONE_DAY && p > 0)
-              .map(([ms, p]) => {
-                const q = raqqrPricesAtMs(ms);
-                return {
-                  ms,
-                  d: new Date(ms).toISOString().slice(0, 10),
-                  p,
-                  q,
-                  zp: priceZScore(p, q[0], q[3], q[6]),
-                  zs: getZ(seed.sharpe, ms),
-                  zc: getZ(seed.cbpl, ms),
-                  zo: getZ(seed.onchain, ms)
-                };
-              });
-          }
-        } catch (e) {
-          console.error("Failed to load btc_seed.json:", e);
-        }
-      }
-
+      // Fallback UI interpolation if Github Action hasn't run today
       try {
         const r = await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot');
         if (r.ok) {
@@ -313,17 +261,16 @@ const BtcStrategistInner = () => {
             const now = new Date();
             const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
             const todayStr = new Date(todayMs).toISOString().slice(0, 10);
-            const q = raqqrPricesAtMs(todayMs);
             const prev = records[records.length - 1];
+            
             const updatedRow = {
               ms: todayMs,
               d: todayStr,
               p: livePrice,
-              q,
-              zp: priceZScore(livePrice, q[0], q[3], q[6]),
-              zs: prev.zs,
-              zc: prev.zc,
-              zo: prev.zo
+              q: prev.q, // Carry forward yesterday's Walk-Forward bands for today's spot tick
+              zp: priceZScore(livePrice, prev.q[0], prev.q[3], prev.q[6]),
+              zs: prev.zs, zc: prev.zc, zo: prev.zo, zl: prev.zl,
+              zf: prev.zf, zh: prev.zh, zn: prev.zn
             };
             if (prev.d === todayStr) {
               records = [...records.slice(0, -1), updatedRow];
@@ -387,18 +334,24 @@ const BtcStrategistInner = () => {
     const zcArr = reSmoothCausalEma(valid.map(r => r.zc), 7, emaSpans.cbpl);
     const zoArr = reSmoothCausalEma(valid.map(r => r.zo), 7, emaSpans.onchain);
     const zsArr = reSmoothCausalEma(valid.map(r => r.zs), 14, emaSpans.sharpe);
+    const zfArr = reSmoothCausalEma(valid.map(r => r.zf), 1, emaSpans.froth);
+    const zhArr = reSmoothCausalEma(valid.map(r => r.zh), 1, emaSpans.hash);
+    const znArr = reSmoothCausalEma(valid.map(r => r.zn), 1, emaSpans.nvt);
+    const zlArr = reSmoothCausalEma(valid.map(r => r.zl), 1, emaSpans.liquidity);
 
     return valid.map((r, i) => {
-      const zp = zpArr[i];
-      const zc = zcArr[i];
-      const zo = zoArr[i];
-      const zs = zsArr[i];
+      const zp = zpArr[i], zc = zcArr[i], zo = zoArr[i], zs = zsArr[i];
+      const zf = zfArr[i], zh = zhArr[i], zn = znArr[i], zl = zlArr[i];
 
       const votes = [];
       if (indicators.price) votes.push(zp);
       if (indicators.cbpl) votes.push(zc);
       if (indicators.onchain) votes.push(zo);
       if (indicators.sharpe) votes.push(zs);
+      if (indicators.froth) votes.push(zf);
+      if (indicators.hash) votes.push(zh);
+      if (indicators.nvt) votes.push(zn);
+      if (indicators.liquidity) votes.push(zl);
 
       let compZ = NaN;
       if (votes.length > 0 && votes.every(v => v !== null && v !== undefined && isFinite(v))) {
@@ -409,25 +362,11 @@ const BtcStrategistInner = () => {
 
       return {
         ...r,
-        zp,
-        zc,
-        zo,
-        zs,
-        q01: r.q[0],
-        q10: r.q[1],
-        q25: r.q[2],
-        q50: r.q[3],
-        q75: r.q[4],
-        q95: r.q[5],
-        q99: r.q[6],
+        zp, zc, zo, zs, zf, zh, zn, zl,
+        q01: r.q[0], q10: r.q[1], q25: r.q[2], q50: r.q[3], q75: r.q[4], q95: r.q[5], q99: r.q[6],
         logP: safeLog10(r.p),
-        logQ01: safeLog10(r.q[0]),
-        logQ10: safeLog10(r.q[1]),
-        logQ25: safeLog10(r.q[2]),
-        logQ50: safeLog10(r.q[3]),
-        logQ75: safeLog10(r.q[4]),
-        logQ95: safeLog10(r.q[5]),
-        logQ99: safeLog10(r.q[6]),
+        logQ01: safeLog10(r.q[0]), logQ10: safeLog10(r.q[1]), logQ25: safeLog10(r.q[2]),
+        logQ50: safeLog10(r.q[3]), logQ75: safeLog10(r.q[4]), logQ95: safeLog10(r.q[5]), logQ99: safeLog10(r.q[6]),
         compZ: isFinite(compZ) ? Number(compZ.toFixed(2)) : null,
         compRisk: isFinite(compRisk) ? Number(compRisk.toFixed(2)) : null,
         zMappedToRiskAxis: isFinite(compZ) ? Number(((compZ + 3) / 6 * 100).toFixed(2)) : null,
@@ -454,21 +393,14 @@ const BtcStrategistInner = () => {
 
   const riskGradientStops = useMemo(() => {
     const vals = chartData.map(d => d.compRisk).filter(v => v !== null && isFinite(v));
-    if (!vals.length) {
-      return [
-        { offset: "0%", color: "#ff4444" },
-        { offset: "100%", color: "#22c55e" }
-      ];
-    }
+    if (!vals.length) return [{ offset: "0%", color: "#ff4444" }, { offset: "100%", color: "#22c55e" }];
+    
     const minR = Math.min(...vals);
     const maxR = Math.max(...vals);
 
     if (maxR - minR < 1e-4) {
       const c = riskZoneColor(maxR);
-      return [
-        { offset: "0%", color: c },
-        { offset: "100%", color: c }
-      ];
+      return [{ offset: "0%", color: c }, { offset: "100%", color: c }];
     }
 
     const offsetForRisk = (rVal) => `${clamp(((maxR - rVal) / (maxR - minR)) * 100, 0, 100).toFixed(2)}%`;
@@ -485,7 +417,6 @@ const BtcStrategistInner = () => {
     ];
   }, [chartData]);
 
-  // 3. Run Curve Backtest
   const backtest = useMemo(() => {
     if (!series.length) return null;
     const startMs = Date.parse(btStartDate + "T00:00:00Z");
@@ -538,17 +469,8 @@ const BtcStrategistInner = () => {
       const distZoneBg = rate < -0.05 ? 1 : 0;
 
       return {
-        d: row.d,
-        price: row.p,
-        risk,
-        rate,
-        trade,
-        cash: cashVal,
-        btc,
-        portfolio: pfVal,
-        buyHold: bhVal,
-        accZoneBg,
-        distZoneBg,
+        d: row.d, price: row.p, risk, rate, trade,
+        cash: cashVal, btc, portfolio: pfVal, buyHold: bhVal, accZoneBg, distZoneBg,
         plotPortfolio: btLogScale ? safeLog10(Math.max(1, pfVal)) : pfVal,
         plotBuyHold: btLogScale ? safeLog10(Math.max(1, bhVal)) : bhVal,
         plotCash: btLogScale ? safeLog10(Math.max(1, cashVal)) : cashVal
@@ -568,27 +490,12 @@ const BtcStrategistInner = () => {
     const plotHistory = fullHistory.filter((_, idx) => idx % plotStep === 0 || idx === fullHistory.length - 1);
 
     return {
-      days: rows.length,
-      buyDays,
-      sellDays,
-      noTradeDays,
-      startingCash: btStartingCash,
-      cash,
-      btc,
-      avgBuy: btcBoughtGross > 0 ? grossBought / btcBoughtGross : NaN,
-      portfolioValue: last.portfolio,
-      pnl,
-      retPct,
+      days: rows.length, buyDays, sellDays, noTradeDays, startingCash: btStartingCash,
+      cash, btc, avgBuy: btcBoughtGross > 0 ? grossBought / btcBoughtGross : NaN,
+      portfolioValue: last.portfolio, pnl, retPct,
       avgRate: riskCount ? rateSum / riskCount : NaN,
       avgRisk: riskCount ? riskSum / riskCount : NaN,
-      lumpValue: last.buyHold,
-      lumpRet,
-      vsLump,
-      vsLumpPct,
-      mddDca,
-      mddBh,
-      history: fullHistory,
-      plotHistory
+      lumpValue: last.buyHold, lumpRet, vsLump, vsLumpPct, mddDca, mddBh, history: fullHistory, plotHistory
     };
   }, [series, btStartDate, btStartingCash, curveNodes, btLogScale, isMobile]);
 
@@ -604,7 +511,6 @@ const BtcStrategistInner = () => {
     a.click();
   };
 
-  // SVG Curve Drag Handlers
   const SVG_W = 760, SVG_H = 260, PAD_L = 52, PAD_R = 16, PAD_T = 16, PAD_B = 28;
   const PLOT_W = SVG_W - PAD_L - PAD_R, PLOT_H = SVG_H - PAD_T - PAD_B;
   const pxX = (risk) => PAD_L + (risk / 100) * PLOT_W;
@@ -685,12 +591,12 @@ const BtcStrategistInner = () => {
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: isMobile ? '1fr' : '340px minmax(0, 1fr)',
+      gridTemplateColumns: isMobile ? '1fr' : '360px minmax(0, 1fr)',
       gap: isMobile ? '14px' : '20px',
       alignItems: 'start'
     }}>
       
-      {/* LEFT SIDEBAR (Stacks on top or below cleanly on mobile) */}
+      {/* LEFT SIDEBAR */}
       <div style={{
         display: 'flex',
         flexDirection: 'column',
@@ -810,17 +716,22 @@ const BtcStrategistInner = () => {
           )}
 
           {[
-            ['price', 'Asymmetric Tail Curvature (Price)', latestRow?.zp],
-            ['cbpl', 'Cost Basis P/L Ratio', latestRow?.zc],
+            ['price', 'Asym. Tail Curvature (Price)', latestRow?.zp],
             ['onchain', 'Onchain Risk Composite', latestRow?.zo],
-            ['sharpe', 'Realized P/L Sharpe', latestRow?.zs]
+            ['cbpl', 'Cost Basis P/L Ratio', latestRow?.zc],
+            ['sharpe', 'Realized P/L Sharpe', latestRow?.zs],
+            ['froth', 'Speculative Froth', latestRow?.zf],
+            ['hash', 'Miner Capitulation (Hash)', latestRow?.zh],
+            ['nvt', 'Network Adoption (NVT)', latestRow?.zn],
+            ['liquidity', 'Fed Liquidity Impulse', latestRow?.zl]
           ].map(([key, label, zVal], i) => (
-            <div key={key} style={{ padding: '8px 0', borderBottom: i < 3 ? '1px solid #21262d' : 'none' }}>
+            <div key={key} style={{ padding: '8px 0', borderBottom: i < 7 ? '1px solid #21262d' : 'none' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e6edf3' }}>
                   <input
                     type="checkbox"
                     checked={indicators[key]}
+                    disabled={zVal === null || zVal === undefined}
                     onChange={(e) => handleToggleIndicator(key, e.target.checked)}
                   />
                   {label}
@@ -833,7 +744,7 @@ const BtcStrategistInner = () => {
               {/* Adjustable EMA Day Control (Clamped strictly to max 90) */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', paddingLeft: '22px', gap: '8px' }}>
                 <span style={{ fontSize: '11px', color: '#8b949e', fontFamily: 'monospace' }}>
-                  EMA Smoothing: <strong style={{ color: '#c9d1d9' }}>{emaSpans[key]}d</strong> {emaSpans[key] === 1 ? '(Raw)' : ''}
+                  EMA: <strong style={{ color: '#c9d1d9' }}>{emaSpans[key]}d</strong> {emaSpans[key] === 1 ? '(Raw)' : ''}
                 </span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <input
@@ -874,7 +785,7 @@ const BtcStrategistInner = () => {
                 {b.name}
               </span>
               <b style={{ fontFamily: 'monospace' }}>
-                {latestRow ? `${usdShort(latestRow.q[b.loIdx])} – ${usdShort(latestRow.q[b.hiIdx])}` : '—'}
+                {latestRow && latestRow.q && latestRow.q.length === 7 ? `${usdShort(latestRow.q[b.loIdx])} – ${usdShort(latestRow.q[b.hiIdx])}` : '—'}
               </b>
             </div>
           ))}
@@ -997,38 +908,39 @@ const BtcStrategistInner = () => {
             lineHeight: 1.55,
             color: '#c9d1d9',
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
             gap: '14px'
           }}>
-            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
+            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
               <strong style={{ color: '#f3cd7a', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
-                1. Asymmetric Tail Curvature Rainbow (RAQQR)
+                1. Walk-Forward Asymmetric Tail Curvature Rainbow (Dynamic RAQQR)
               </strong>
-              Models conditional quantiles of <code>log10(BTC Price)</code> as a centered quadratic in log-time:<br />
-              <code style={{ color: '#79c0ff', display: 'block', margin: '6px 0', fontSize: '11.5px' }}>
-                Q_τ(log10 P) = c_τ + a_τ·x + b_τ·x²,  x = ln(t) - 7.9914
-              </code>
-              where <code>t</code> is days since Jan 1, 2009. Lower accumulation rails (Q1%–Q25%) share mild curvature (<code>b = -0.0241</code>), the Q50% median uses <code>b = -0.1126</code>, and upper bubble rails (Q75%–Q99%) curve down faster (<code>b = -0.3259</code>) to capture diminishing cycle returns.<br />
-              <strong>Price Z-Score:</strong> Linearly maps <code>ln(Price)</code> between Q50% (<code>Z = 0</code>), Q1% lower rail (<code>Z = +3.0</code> buy extreme), and Q99% upper rail (<code>Z = -3.0</code> sell extreme).
+              This valuation model enforces <strong>Zero Look-Ahead Bias</strong>. Every single day, it runs a live quadratic regression on the entire historical dataset up to that exact day. 
+              <br/><br/>
+              It models conditional quantiles of <code>log10(BTC Price)</code> as a centered quadratic in log-time. It extracts the historical residuals of the fit to map exactly where the 1st, 10th, 25th, 50th, 75th, 95th, and 99th percentiles have historically traded. If a long squeeze breaks the model (like in 2020), the live walk-forward algorithm physically bends the rails downwards to adapt and learn for the future.
             </div>
 
-            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
+            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
               <strong style={{ color: '#22c55e', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
-                2. Composite Z-Score & Valuation Risk %
+                2. Diversified Composite Z-Score & Valuation Risk %
               </strong>
-              Each enabled indicator in the left sidebar casts an equal-weighted vote in <code>[-3, +3]</code> (where <code>+Z</code> = undervalued/buy and <code>-Z</code> = overvalued/sell) with customizable causal EMA smoothing:
-              <ul style={{ margin: '6px 0', paddingLeft: '18px', fontSize: '12px' }}>
-                <li><strong>Price Valuation (RAQQR):</strong> Position within the Q1%–Q99% log-time rainbow.</li>
+              Each enabled indicator in the left sidebar casts an equal-weighted vote in <code>[-3, +3]</code> (where <code>+Z</code> = undervalued/buy and <code>-Z</code> = overvalued/sell). We combine on-chain data, derivatives froth, macro liquidity, and price action to generate a holistic risk score.
+              <ul style={{ margin: '6px 0', paddingLeft: '18px', fontSize: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+                <li><strong>Price Valuation (Walk-Forward):</strong> Position within the Q1%–Q99% log-time rainbow.</li>
                 <li><strong>Cost Basis P/L Ratio:</strong> Log ratio of total unrealized profit to unrealized loss across the UTXO cost-basis histogram.</li>
-                <li><strong>Onchain Risk Composite:</strong> Weighted blend of 8 on-chain percentile metrics (MVRV, MVRV Z, NUPL, Puell, LTH PVR, Supply P/L).</li>
-                <li><strong>Realized P/L Sharpe:</strong> Full-history percentile rank of rolling realized P/L Sharpe.</li>
+                <li><strong>Onchain Risk Composite:</strong> Weighted blend of 8 on-chain metrics (MVRV, NUPL, Puell, LTH PVR).</li>
+                <li><strong>Realized P/L Sharpe:</strong> Rolling realized P/L Sharpe mapped to a Z-score.</li>
+                <li><strong>Speculative Froth:</strong> Price extension vs 50-day moving average (identifies excessive derivatives greed).</li>
+                <li><strong>Miner Capitulation (Hash Ribbons):</strong> 30d vs 60d Hash Rate. Unprofitable miner capitulation marks generational bottoms.</li>
+                <li><strong>Network Adoption (NVT):</strong> Market Cap divided by On-chain USD Transaction Volume (Bitcoin's P/E ratio).</li>
+                <li><strong>Hoagie Net Liquidity Impulse:</strong> 90-day momentum of Net Fed Liquidity (WALCL − TGA − RRP + Facilities).</li>
               </ul>
               <code style={{ color: '#79c0ff', display: 'block', marginTop: '4px', fontSize: '11.5px' }}>
                 Composite Risk % = clamp(50 - (Composite_Z / 3) × 50, 0, 100)
               </code>
             </div>
 
-            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d' }}>
+            <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
               <strong style={{ color: '#58a6ff', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
                 3. Accum/Dist Curve & Backtester
               </strong>
@@ -1116,8 +1028,6 @@ const BtcStrategistInner = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={chartData} margin={{ top: 10, right: isMobile ? 5 : 20, left: 0, bottom: 5 }}>
                   <defs>
-                    {/* Dynamically calibrated to [minR, maxR] of chartData so 25%, 50%, and 75%
-                        thresholds NEVER shift colors when zooming into 1M / 3M / 1Y / ALL */}
                     <linearGradient id="compRiskZoneGrad" x1="0" y1="0" x2="0" y2="1">
                       {riskGradientStops.map((s, idx) => (
                         <stop key={idx} offset={s.offset} stopColor={s.color} />
@@ -1375,7 +1285,6 @@ const BtcStrategistInner = () => {
                         tickFormatter={(v) => btLogScale ? usdShort(Math.pow(10, Number(v))) : usdShort(Number(v))}
                         width={isMobile ? 52 : 68}
                       />
-                      {/* Hidden [0, 1] Y-Axis to render full-height Green & Red zone background columns */}
                       <YAxis yAxisId="zone" domain={[0, 1]} hide={true} />
                       <Tooltip
                         contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
