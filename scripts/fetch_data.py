@@ -13,28 +13,17 @@ START_DATE = '2023-01-01'
 FRED_START_DATE = '2022-01-01'  # 1-year lookback so YoY % is ready on 2023-01-01
 TODAY = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
 
-# --- RAQQR (Asymmetric Tail Curvature) CONSTANTS ---
 ONE_DAY_MS = 86400000
-RAQQR_MU = 7.9914
 RAQQR_GENESIS_MS = int(datetime.datetime(2009, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
-RAQQR_KEYS = ["0.01", "0.1", "0.25", "0.5", "0.75", "0.95", "0.99"]
-RAQQR_COEF = {
-    "0.01": (2.837, 2.578, -0.0241),
-    "0.1":  (2.933, 2.552, -0.0241),
-    "0.25": (3.004, 2.554, -0.0241),
-    "0.5":  (3.214, 2.482, -0.1126),
-    "0.75": (3.562, 2.283, -0.3259),
-    "0.95": (3.897, 1.964, -0.3259),
-    "0.99": (4.028, 1.904, -0.3259),
-}
+
+def safe_round(val, decimals=4):
+    """Safely rounds floats for JSON, converting NaNs to None (null)."""
+    if val is None or pd.isna(val) or math.isnan(val) or np.isnan(val):
+        return None
+    return round(float(val), decimals)
 
 
 def fetch_treasury_tga():
-    """
-    Fetches Daily TGA from US Treasury.
-    SMART LOGIC: Fetches both 'Open' and 'Close'.
-    If 'Close' is null, falls back to 'Open'.
-    """
     base_url = "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance"
     params = {
         'fields': 'record_date,account_type,open_today_bal,close_today_bal',
@@ -42,16 +31,12 @@ def fetch_treasury_tga():
         'page[size]': 5000,
         'sort': '-record_date'
     }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Accept': 'application/json'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json'}
 
     print(f"Fetching TGA from: {base_url} ...")
     try:
         response = requests.get(base_url, params=params, headers=headers, timeout=20)
         data = response.json()
-
         if 'data' not in data:
             return pd.DataFrame()
         df = pd.DataFrame(data['data'])
@@ -65,23 +50,19 @@ def fetch_treasury_tga():
         df['open_clean'] = pd.to_numeric(df['open_today_bal'].astype(str).str.replace(',', ''), errors='coerce')
         df['TGA_Daily'] = df['close_clean'].fillna(df['open_clean'])
         df = df.dropna(subset=['TGA_Daily'])
-
         df['date'] = pd.to_datetime(df['record_date'])
         df = df.groupby('date')['TGA_Daily'].first().reset_index()
         df = df.set_index('date').sort_index()
 
         print(f"Successfully loaded {len(df)} daily TGA records.")
         return df[['TGA_Daily']]
-
     except Exception as e:
         print(f"Error fetching Treasury API: {e}")
         return pd.DataFrame()
 
 
 def fetch_fred_data():
-    """Fetches Liquidity and Inflation series from FRED ONE BY ONE to prevent crashes."""
     print("Fetching FRED Data (Liquidity + Composite Inflation)...")
-
     series_dict = {
         'WALCL': 'Fed_Assets',
         'RRPONTSYD': 'RRP',
@@ -113,21 +94,15 @@ def fetch_fred_data():
 
     for new_name in series_dict.values():
         if new_name not in combined_df.columns:
-            print(f"Setting missing data column '{new_name}' to 0.")
             combined_df[new_name] = 0.0
 
     return combined_df
 
 
 def fetch_latest_btc_candles(start_ms):
-    """
-    Fetches daily BTC-USD candles since start_ms using US-accessible APIs
-    (Coinbase Exchange -> Kraken fallback) so GitHub Actions US runners never hit HTTP 451.
-    """
     new_candles = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
 
-    # 1. Try Coinbase Exchange Daily Candles
     try:
         start_dt = datetime.datetime.fromtimestamp(start_ms / 1000, tz=datetime.timezone.utc)
         end_dt = datetime.datetime.now(datetime.timezone.utc)
@@ -144,12 +119,10 @@ def fetch_latest_btc_candles(start_ms):
                 close_price = float(row[4])
                 if close_price > 0:
                     new_candles[day_ms] = close_price
-            print(f"Fetched {len(new_candles)} recent BTC daily candles from Coinbase.")
             return new_candles
     except Exception as e:
         print(f"Coinbase BTC fetch fallback: {e}")
 
-    # 2. Fallback: Kraken OHLC (interval=1440 mins = 1 day)
     try:
         url = "https://api.kraken.com/0/public/OHLC"
         params = {'pair': 'XXBTZUSD', 'interval': 1440, 'since': int(start_ms / 1000) - 172800}
@@ -163,7 +136,6 @@ def fetch_latest_btc_candles(start_ms):
                 close_price = float(row[4])
                 if close_price > 0:
                     new_candles[day_ms] = close_price
-            print(f"Fetched {len(new_candles)} recent BTC daily candles from Kraken.")
             return new_candles
     except Exception as e:
         print(f"Kraken BTC fetch fallback: {e}")
@@ -171,22 +143,37 @@ def fetch_latest_btc_candles(start_ms):
     return new_candles
 
 
-def raqqr_quantiles_at_ms(ms):
-    """Evaluates the 7 Rearranged Asymmetric Quadratic Quantile Regression (RAQQR) price bands."""
-    t = max(1, round((ms - RAQQR_GENESIS_MS) / ONE_DAY_MS))
-    x = math.log(t) - RAQQR_MU
-    raw = []
-    for k in RAQQR_KEYS:
-        c, a, b = RAQQR_COEF[k]
-        raw.append(10 ** (c + a * x + b * x * x))
-    raw.sort()
-    return raw
+def fetch_blockchain_metrics(sorted_ms):
+    """Fetches Hash Rate and Tx Volume from Blockchain.info, aligning to our UTC dates."""
+    metrics = {}
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    base_index = pd.to_datetime([datetime.datetime.fromtimestamp(m/1000, tz=datetime.timezone.utc) for m in sorted_ms]).floor('D')
+
+    endpoints = {
+        'hashrate': 'hash-rate',
+        'tx_vol': 'estimated-transaction-volume-usd'
+    }
+
+    for key, ep in endpoints.items():
+        try:
+            r = requests.get(f"https://api.blockchain.info/charts/{ep}?timespan=all&format=json", headers=headers, timeout=15)
+            if r.status_code == 200:
+                vals = r.json().get('values', [])
+                if vals:
+                    df = pd.DataFrame(vals)
+                    df['date'] = pd.to_datetime(df['x'], unit='s').dt.floor('D')
+                    s = df.groupby('date')['y'].mean()
+                    s = s.reindex(base_index).ffill()
+                    metrics[key] = s
+        except Exception as e:
+            print(f"Error fetching blockchain.info {key}: {e}")
+
+    return metrics
 
 
 def price_z_score(price, q01, q50, q99):
-    """Reversed RAQQR valuation Z-score: +3 = Q1% bottom (buy), 0 = Q50% median, -3 = Q99% top (sell)."""
     if price <= 0 or not (q01 < q50 < q99):
-        return 0.0
+        return None
     lp, ll, lm, lh = math.log(price), math.log(q01), math.log(q50), math.log(q99)
     if lp <= lm:
         return max(0.0, min(3.0, 3.0 * (lm - lp) / max(1e-12, lm - ll)))
@@ -194,10 +181,6 @@ def price_z_score(price, q01, q50, q99):
 
 
 def build_btc_strategist_data(full_macro_df):
-    """
-    Loads public/btc_seed.json (or FRED/API fallback), appends new daily BTC candles,
-    computes RAQQR bands, extends on-chain/Sharpe/Liquidity Z-scores, and writes public/btc_data.json.
-    """
     print("Building BTC Strategic DCA dataset...")
     seed_path = 'public/btc_seed.json'
     btc_map = {}
@@ -221,13 +204,10 @@ def build_btc_strategist_data(full_macro_df):
             if 'onchain' in seed:
                 onchain_start = int(seed['onchain']['start'])
                 onchain_vals = list(seed['onchain']['values'])
-            print(f"Loaded {len(btc_map)} historical BTC candles from {seed_path}.")
         except Exception as e:
             print(f"Warning reading {seed_path}: {e}")
 
-    # Fallback if btc_seed.json hasn't been added yet: fetch FRED CBBTCUSD from 2014
     if not btc_map:
-        print("btc_seed.json not found; fetching CBBTCUSD history from FRED...")
         try:
             btc_fred = web.DataReader('CBBTCUSD', 'fred', '2014-12-01', TODAY).dropna()
             for dt_idx, row in btc_fred.iterrows():
@@ -241,7 +221,6 @@ def build_btc_strategist_data(full_macro_df):
         print("WARNING: No BTC price data available to build btc_data.json.")
         return
 
-    # Fetch and merge newest daily candles up to today UTC
     today_utc = datetime.datetime.now(datetime.timezone.utc)
     today_ms = int(datetime.datetime(today_utc.year, today_utc.month, today_utc.day, tzinfo=datetime.timezone.utc).timestamp() * 1000)
 
@@ -255,25 +234,60 @@ def build_btc_strategist_data(full_macro_df):
     sorted_ms = sorted(btc_map.keys())
     closes = np.array([btc_map[ms] for ms in sorted_ms], dtype=float)
 
-    # Compute dynamic fallback proxies for any dates beyond the seed arrays
-    # 1. Rolling 365d Realized Sharpe proxy (14d EMA, percentile rank -> [+3, -3])
-    log_ret = np.diff(np.log(closes), prepend=np.log(closes[0]))
-    ret_s = pd.Series(log_ret)
-    roll_sharpe = (ret_s.rolling(365, min_periods=30).mean() / ret_s.rolling(365, min_periods=30).std().replace(0, np.nan)).fillna(0)
-    sharpe_ema = roll_sharpe.ewm(span=14, adjust=False).mean()
-    sharpe_pct_rank = sharpe_ema.rank(pct=True).fillna(0.5).values
-    sharpe_proxy_z = np.clip(3.0 - 6.0 * sharpe_pct_rank, -3.0, 3.0)
+    # 1. Walk-Forward Power Law (Dynamic Quadratic Quantile Regression)
+    # Eradicates lookahead bias by fitting only on data available up to day i.
+    print("Running Walk-Forward Power Law Regression...")
+    x_days = np.array([max(1, (m - RAQQR_GENESIS_MS)/ONE_DAY_MS) for m in sorted_ms])
+    x_log = np.log(x_days)
+    y_log = np.log10(closes)
 
-    # 2. Rolling 200d/4yr Realized Value (MVRV / CBPL proxy) for post-seed dates
-    sma_200 = pd.Series(closes).rolling(200, min_periods=20).mean().values
-    sma_1460 = pd.Series(closes).rolling(1460, min_periods=100).mean().values
-    mvrv_raw = np.log(closes / np.maximum(1e-8, 0.5 * sma_200 + 0.5 * sma_1460))
-    mvrv_ema = pd.Series(mvrv_raw).ewm(span=7, adjust=False).mean().values
-    med_mvrv = np.nanmedian(mvrv_ema)
-    mad_mvrv = np.nanmedian(np.abs(mvrv_ema - med_mvrv)) or 1.0
-    onchain_proxy_z = np.clip(-(mvrv_ema - med_mvrv) / (1.4826 * mad_mvrv), -3.0, 3.0)
+    q_out = np.zeros((len(sorted_ms), 7))
+    for i in range(len(sorted_ms)):
+        if i < 365:
+            q_out[i] = [closes[i]*0.3, closes[i]*0.4, closes[i]*0.6, closes[i], closes[i]*1.5, closes[i]*2.5, closes[i]*4.0]
+            continue
+        # Quadratic fit on historical subset
+        p = np.polyfit(x_log[:i+1], y_log[:i+1], 2)
+        preds = np.polyval(p, x_log[:i+1])
+        residuals = y_log[:i+1] - preds
+        pcts = np.percentile(residuals, [1, 10, 25, 50, 75, 95, 99])
+        today_pred = np.polyval(p, x_log[i])
+        q_out[i, :] = 10**(today_pred + pcts)
 
-    # 3. Hoagie Net Liquidity Z-score (90-day momentum of Net Fed Liquidity mapped to [-3, +3])
+    # 2. Extract new on-chain and derivative proxies
+    bc_metrics = fetch_blockchain_metrics(sorted_ms)
+
+    # 2A. Speculative Froth (zf)
+    sma_50 = pd.Series(closes).rolling(50, min_periods=10).mean().values
+    froth_raw = np.log(closes / np.maximum(1e-8, sma_50))
+    med_f = np.nanmedian(froth_raw)
+    mad_f = np.nanmedian(np.abs(froth_raw - med_f)) or 1.0
+    zf_arr = np.clip(-(froth_raw - med_f) / (1.4826 * mad_f), -3.0, 3.0)
+
+    # 2B. Hash Ribbons Miner Capitulation (zh)
+    if 'hashrate' in bc_metrics:
+        hr = bc_metrics['hashrate']
+        sma30_h = hr.rolling(30, min_periods=10).mean()
+        sma60_h = hr.rolling(60, min_periods=20).mean()
+        hash_mom = ((sma30_h - sma60_h) / np.maximum(1e-8, sma60_h)).values
+        med_h = np.nanmedian(hash_mom)
+        mad_h = np.nanmedian(np.abs(hash_mom - med_h)) or 0.01
+        zh_arr = np.clip(-(hash_mom - med_h) / (1.4826 * mad_h), -3.0, 3.0)
+    else:
+        zh_arr = np.full(len(closes), np.nan)
+
+    # 2C. NVT Signal (zn)
+    if 'tx_vol' in bc_metrics:
+        tx_vol = bc_metrics['tx_vol'].replace(0, np.nan).ffill().values
+        nvt_raw = closes / np.maximum(1e-8, tx_vol)
+        nvt_90d = pd.Series(nvt_raw).rolling(90, min_periods=30).mean().values
+        med_n = np.nanmedian(nvt_90d)
+        mad_n = np.nanmedian(np.abs(nvt_90d - med_n)) or 1.0
+        zn_arr = np.clip(-(nvt_90d - med_n) / (1.4826 * mad_n), -3.0, 3.0)
+    else:
+        zn_arr = np.full(len(closes), np.nan)
+
+    # 2D. Hoagie Net Liquidity Impulse (zl)
     liq_z_by_date = {}
     if full_macro_df is not None and 'Net_Liquidity' in full_macro_df.columns:
         liq_s = full_macro_df['Net_Liquidity'].dropna()
@@ -283,21 +297,37 @@ def build_btc_strategist_data(full_macro_df):
             mad_l = (liq_roc - med_l).abs().median() or 1e-6
             liq_z_series = ((liq_roc - med_l) / (1.4826 * mad_l)).clip(-3.0, 3.0)
             for dt_idx, val in liq_z_series.items():
-                liq_z_by_date[dt_idx.strftime('%Y-%m-%d')] = round(float(val), 4)
+                liq_z_by_date[dt_idx.strftime('%Y-%m-%d')] = float(val)
+
+    # 3. Post-Seed Proxies for CBPL/Onchain/Sharpe
+    log_ret = np.diff(np.log(closes), prepend=np.log(closes[0]))
+    ret_s = pd.Series(log_ret)
+    roll_sharpe = (ret_s.rolling(365, min_periods=30).mean() / ret_s.rolling(365, min_periods=30).std().replace(0, np.nan)).fillna(0)
+    sharpe_ema = roll_sharpe.ewm(span=14, adjust=False).mean()
+    sharpe_pct_rank = sharpe_ema.rank(pct=True).fillna(0.5).values
+    sharpe_proxy_z = np.clip(3.0 - 6.0 * sharpe_pct_rank, -3.0, 3.0)
+
+    sma_200 = pd.Series(closes).rolling(200, min_periods=20).mean().values
+    sma_1460 = pd.Series(closes).rolling(1460, min_periods=100).mean().values
+    mvrv_raw = np.log(closes / np.maximum(1e-8, 0.5 * sma_200 + 0.5 * sma_1460))
+    mvrv_ema = pd.Series(mvrv_raw).ewm(span=7, adjust=False).mean().values
+    med_mvrv = np.nanmedian(mvrv_ema)
+    mad_mvrv = np.nanmedian(np.abs(mvrv_ema - med_mvrv)) or 1.0
+    onchain_proxy_z = np.clip(-(mvrv_ema - med_mvrv) / (1.4826 * mad_mvrv), -3.0, 3.0)
 
     def lookup_seed_or_proxy(start_ts, vals, ms, proxy_val):
         if start_ts is not None and vals:
             idx = round((ms - start_ts) / ONE_DAY_MS)
             if 0 <= idx < len(vals) and vals[idx] is not None:
-                return round(float(vals[idx]), 4)
-        return round(float(proxy_val), 4)
+                return float(vals[idx])
+        return float(proxy_val)
 
     records = []
     for i, ms in enumerate(sorted_ms):
-        price = round(float(closes[i]), 2)
+        price = closes[i]
         dt_str = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
-        q = raqqr_quantiles_at_ms(ms)
-        zp = round(price_z_score(price, q[0], q[3], q[6]), 4)
+        q = q_out[i]
+        zp = price_z_score(price, q[0], q[3], q[6])
         zs = lookup_seed_or_proxy(sharpe_start, sharpe_vals, ms, sharpe_proxy_z[i])
         zc = lookup_seed_or_proxy(cbpl_start, cbpl_vals, ms, onchain_proxy_z[i])
         zo = lookup_seed_or_proxy(onchain_start, onchain_vals, ms, onchain_proxy_z[i])
@@ -306,13 +336,16 @@ def build_btc_strategist_data(full_macro_df):
         records.append({
             "ms": ms,
             "d": dt_str,
-            "p": price,
-            "q": [round(v, 2) for v in q],
-            "zp": zp,
-            "zs": zs,
-            "zc": zc,
-            "zo": zo,
-            "zl": zl
+            "p": safe_round(price, 2),
+            "q": [safe_round(v, 2) for v in q],
+            "zp": safe_round(zp),
+            "zs": safe_round(zs),
+            "zc": safe_round(zc),
+            "zo": safe_round(zo),
+            "zl": safe_round(zl),
+            "zf": safe_round(zf_arr[i]),
+            "zh": safe_round(zh_arr[i]),
+            "zn": safe_round(zn_arr[i])
         })
 
     out_payload = {
@@ -326,7 +359,6 @@ def build_btc_strategist_data(full_macro_df):
 
 
 def main():
-    # 1. Get the data
     tga_df = fetch_treasury_tga()
     fred_df = fetch_fred_data()
 
@@ -334,7 +366,6 @@ def main():
         print("CRITICAL: No FRED data found at all. Exiting.")
         sys.exit(1)
 
-    # 2. Merge Data & Resample to Daily ('D') so 365-day YoY math is exact
     if not tga_df.empty:
         merged_df = fred_df.join(tga_df, how='outer')
         merged_df = merged_df.resample('D').mean()
@@ -344,10 +375,8 @@ def main():
         merged_df = fred_df.resample('D').mean()
         merged_df['Final_TGA'] = (merged_df['TGA_Weekly'] * 1000).ffill()
 
-    # 3. Fill Missing Values
     merged_df = merged_df.ffill().bfill()
 
-    # 4. Calculate Composite Inflation (YoY %) on full lookback before slicing to START_DATE
     merged_df['Official_CPI_YoY'] = merged_df['CPI_Index'].pct_change(365) * 100
     merged_df['Housing_YoY'] = merged_df['Case_Shiller_Index'].pct_change(365) * 100
     merged_df['PPI_YoY'] = merged_df['PPI_Index'].pct_change(365) * 100
@@ -360,7 +389,6 @@ def main():
         (0.20 * merged_df['Breakeven_5Y'])
     )
 
-    # Calculate Net Liquidity across full lookback so BTC Liquidity Z-score has 90d history
     merged_df['Net_Liquidity'] = (
         merged_df['Fed_Assets']
         - merged_df['Final_TGA']
@@ -369,13 +397,9 @@ def main():
         + merged_df['Loans_Held']
     )
 
-    # Build BTC Strategic DCA data (uses full_macro_df for optional Liquidity Z-score)
     build_btc_strategist_data(merged_df)
 
-    # Filter macro data back to START_DATE ('2023-01-01')
     macro_df = merged_df.loc[START_DATE:].copy()
-
-    # 6. Format and Save Macro Data
     macro_df.index.name = 'date'
     final_df = macro_df.reset_index()
     final_df['date'] = final_df['date'].dt.strftime('%Y-%m-%d')
@@ -393,10 +417,8 @@ def main():
     ]].round(2)
 
     output_df = output_df.rename(columns={'Final_TGA': 'TGA_Daily'})
-
-    print("Saving data to public/data.json...")
     output_df.to_json('public/data.json', orient='records')
-    print("Done! Data updated.")
+    print("Done! Macro Data updated.")
 
 
 if __name__ == "__main__":
