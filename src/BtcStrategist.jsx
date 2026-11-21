@@ -5,9 +5,22 @@ import {
 } from 'recharts';
 
 const ONE_DAY = 86400000;
+const RAQQR_MU = 7.9914;
+const RAQQR_GENESIS = Date.UTC(2009, 0, 1);
+const RAQQR_KEYS = ["0.01", "0.1", "0.25", "0.5", "0.75", "0.95", "0.99"];
+const RAQQR_RISK_MARKS = [1, 10, 25, 50, 75, 95, 99];
+const RAQQR_COEF = {
+  "0.01": [2.837, 2.578, -0.0241],
+  "0.1":  [2.933, 2.552, -0.0241],
+  "0.25": [3.004, 2.554, -0.0241],
+  "0.5":  [3.214, 2.482, -0.1126],
+  "0.75": [3.562, 2.283, -0.3259],
+  "0.95": [3.897, 1.964, -0.3259],
+  "0.99": [4.028, 1.904, -0.3259]
+};
+
 const CURVE_RISK_NODES = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
 const CURVE_DEFAULT_VALUES = [10, 10, 10, 10, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -0.5, -2, -4, -10];
-const RAQQR_RISK_MARKS = [1, 10, 25, 50, 75, 95, 99];
 
 const BAND_DEFS = [
   { loIdx: 0, hiIdx: 1, name: "1–10% · Fire Sale", color: "#1f6feb" },
@@ -22,7 +35,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const safeLog10 = (v) => (isFinite(v) && v > 0 ? Math.log10(v) : null);
 
 /**
- * Native SVG to High-Res PNG Exporter (Zero Dependencies)
+ * Native SVG to High-Res PNG Exporter
  */
 function exportChartAsPNG(containerId, fileName) {
   const container = document.getElementById(containerId);
@@ -33,7 +46,7 @@ function exportChartAsPNG(containerId, fileName) {
   const svgData = new XMLSerializer().serializeToString(svg);
   const canvas = document.createElement('canvas');
   const svgSize = svg.getBoundingClientRect();
-  const scale = 2; // High-res multiplier
+  const scale = 2; 
   
   canvas.width = svgSize.width * scale;
   canvas.height = svgSize.height * scale;
@@ -55,8 +68,7 @@ function exportChartAsPNG(containerId, fileName) {
 }
 
 /**
- * Re-smooths a causal EMA series from its baked-in baseSpan 
- * to any user-selected targetSpan (e.g. 1d raw up to 90d).
+ * Re-smooths a causal EMA series from its baked-in baseSpan to user targetSpan.
  */
 function reSmoothCausalEma(values, baseSpan, targetSpan) {
   const bSpan = Math.max(1, Number(baseSpan) || 1);
@@ -98,6 +110,16 @@ const usdExact = (v) => {
   if (!isFinite(v)) return "—";
   return "$" + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+
+function raqqrPricesAtMs(ms) {
+  const t = Math.max(1, Math.round((ms - RAQQR_GENESIS) / ONE_DAY));
+  const x = Math.log(t) - RAQQR_MU;
+  const raw = RAQQR_KEYS.map(k => {
+    const [c, a, b] = RAQQR_COEF[k];
+    return Math.pow(10, c + a * x + b * x * x);
+  });
+  return raw.slice().sort((a, b) => a - b);
+}
 
 function priceZScore(price, lowRail, mid, highRail) {
   if (!isFinite(price) || price <= 0 || !(lowRail < mid && mid < highRail)) return NaN;
@@ -180,9 +202,8 @@ const BtcStrategistInner = () => {
   const [liveStatus, setLiveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('rainbow');
   const [showInfo, setShowInfo] = useState(false);
-  
-  // Z-Score Line Defaulted Off
   const [showZLine, setShowZLine] = useState(false);
+  const [useWalkForward, setUseWalkForward] = useState(true);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 960 : false);
 
   const [tfPreset, setTfPreset] = useState('2017');
@@ -197,13 +218,12 @@ const BtcStrategistInner = () => {
     sharpe: false,
     froth: false,
     hash: false,
-    nvt: false,
-    liquidity: false
+    nvt: false
   });
   const [minToggleWarn, setMinToggleWarn] = useState(false);
 
-  // Fixed Default EMAs (1D Price, 14D Everything Else)
-  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14, froth: 14, hash: 14, nvt: 14, liquidity: 14 };
+  // Adjusted EMAs: 1D for Price, 14D for Everything Else
+  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14, froth: 14, hash: 14, nvt: 14 };
   const [emaSpans, setEmaSpans] = useState(DEFAULT_EMAS);
 
   const [todayCash, setTodayCash] = useState(10000);
@@ -251,7 +271,40 @@ const BtcStrategistInner = () => {
         }
       } catch (_) {}
 
-      // Fallback UI interpolation if Github Action hasn't run today
+      if (!records.length) {
+        try {
+          const res = await fetch('./btc_seed.json');
+          if (res.ok) {
+            const seed = await res.json();
+            const getZ = (ind, ms) => {
+              if (!ind || !Array.isArray(ind.values)) return null;
+              const idx = Math.round((ms - ind.start) / ONE_DAY);
+              if (idx >= 0 && idx < ind.values.length) return ind.values[idx];
+              if (idx >= ind.values.length && idx - (ind.values.length - 1) <= 7) return ind.values[ind.values.length - 1];
+              return null;
+            };
+            const nowMs = Date.now();
+            records = (seed.btc || [])
+              .filter(([ms, p]) => ms <= nowMs + ONE_DAY && p > 0)
+              .map(([ms, p]) => {
+                const q = raqqrPricesAtMs(ms);
+                return {
+                  ms,
+                  d: new Date(ms).toISOString().slice(0, 10),
+                  p,
+                  q_static: q,
+                  q_wf: q,
+                  zs: getZ(seed.sharpe, ms),
+                  zc: getZ(seed.cbpl, ms),
+                  zo: getZ(seed.onchain, ms)
+                };
+              });
+          }
+        } catch (e) {
+          console.error("Failed to load btc_seed.json:", e);
+        }
+      }
+
       try {
         const r = await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot');
         if (r.ok) {
@@ -261,17 +314,25 @@ const BtcStrategistInner = () => {
             const now = new Date();
             const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
             const todayStr = new Date(todayMs).toISOString().slice(0, 10);
-            const prev = records[records.length - 1];
             
+            const prev = records[records.length - 1];
+            const qStaticLive = raqqrPricesAtMs(todayMs);
+            const qWfLive = prev.q_wf || prev.q_static || prev.q; // Carry forward WF bands to today
+
             const updatedRow = {
               ms: todayMs,
               d: todayStr,
               p: livePrice,
-              q: prev.q, // Carry forward yesterday's Walk-Forward bands for today's spot tick
-              zp: priceZScore(livePrice, prev.q[0], prev.q[3], prev.q[6]),
-              zs: prev.zs, zc: prev.zc, zo: prev.zo, zl: prev.zl,
-              zf: prev.zf, zh: prev.zh, zn: prev.zn
+              q_static: qStaticLive,
+              q_wf: qWfLive,
+              zs: prev.zs,
+              zc: prev.zc,
+              zo: prev.zo,
+              zf: prev.zf,
+              zh: prev.zh,
+              zn: prev.zn
             };
+            
             if (prev.d === todayStr) {
               records = [...records.slice(0, -1), updatedRow];
             } else if (todayMs > prev.ms) {
@@ -327,53 +388,62 @@ const BtcStrategistInner = () => {
   };
 
   const series = useMemo(() => {
-    const valid = rawRecords.filter(r => r && Array.isArray(r.q) && r.q.length === 7 && isFinite(r.p) && r.p > 0);
+    const valid = rawRecords.filter(r => r && isFinite(r.p) && r.p > 0);
     if (!valid.length) return [];
 
-    const zpArr = reSmoothCausalEma(valid.map(r => r.zp), 1, emaSpans.price);
+    // Evaluate Z-Price mathematically here using the selected model's Q arrays
+    // This allows instant UI swapping between Static and Walk-Forward without re-fetching
+    const zPriceArr = valid.map(r => {
+      const q = (useWalkForward && r.q_wf && r.q_wf.length === 7) ? r.q_wf : (r.q_static || r.q);
+      if (!q || q.length < 7) return null;
+      return priceZScore(r.p, q[0], q[3], q[6]);
+    });
+
+    const zpArr = reSmoothCausalEma(zPriceArr, 1, emaSpans.price);
     const zcArr = reSmoothCausalEma(valid.map(r => r.zc), 7, emaSpans.cbpl);
     const zoArr = reSmoothCausalEma(valid.map(r => r.zo), 7, emaSpans.onchain);
     const zsArr = reSmoothCausalEma(valid.map(r => r.zs), 14, emaSpans.sharpe);
     const zfArr = reSmoothCausalEma(valid.map(r => r.zf), 1, emaSpans.froth);
     const zhArr = reSmoothCausalEma(valid.map(r => r.zh), 1, emaSpans.hash);
     const znArr = reSmoothCausalEma(valid.map(r => r.zn), 1, emaSpans.nvt);
-    const zlArr = reSmoothCausalEma(valid.map(r => r.zl), 1, emaSpans.liquidity);
 
     return valid.map((r, i) => {
+      const q = (useWalkForward && r.q_wf && r.q_wf.length === 7) ? r.q_wf : (r.q_static || r.q);
+      if (!q || q.length < 7) return null;
+
       const zp = zpArr[i], zc = zcArr[i], zo = zoArr[i], zs = zsArr[i];
-      const zf = zfArr[i], zh = zhArr[i], zn = znArr[i], zl = zlArr[i];
+      const zf = zfArr[i], zh = zhArr[i], zn = znArr[i];
 
       const votes = [];
-      if (indicators.price) votes.push(zp);
-      if (indicators.cbpl) votes.push(zc);
-      if (indicators.onchain) votes.push(zo);
-      if (indicators.sharpe) votes.push(zs);
-      if (indicators.froth) votes.push(zf);
-      if (indicators.hash) votes.push(zh);
-      if (indicators.nvt) votes.push(zn);
-      if (indicators.liquidity) votes.push(zl);
+      if (indicators.price && zp !== null) votes.push(zp);
+      if (indicators.cbpl && zc !== null) votes.push(zc);
+      if (indicators.onchain && zo !== null) votes.push(zo);
+      if (indicators.sharpe && zs !== null) votes.push(zs);
+      if (indicators.froth && zf !== null) votes.push(zf);
+      if (indicators.hash && zh !== null) votes.push(zh);
+      if (indicators.nvt && zn !== null) votes.push(zn);
 
       let compZ = NaN;
-      if (votes.length > 0 && votes.every(v => v !== null && v !== undefined && isFinite(v))) {
+      if (votes.length > 0 && votes.every(v => isFinite(v))) {
         compZ = clamp(votes.reduce((a, b) => a + Number(b), 0) / votes.length, -3, 3);
       }
       const compRisk = isFinite(compZ) ? clamp(50 - (compZ / 3) * 50, 0, 100) : NaN;
-      const eqmRisk = eqmRiskFromPrice(r.p, r.q);
+      const eqmRisk = eqmRiskFromPrice(r.p, q);
 
       return {
         ...r,
-        zp, zc, zo, zs, zf, zh, zn, zl,
-        q01: r.q[0], q10: r.q[1], q25: r.q[2], q50: r.q[3], q75: r.q[4], q95: r.q[5], q99: r.q[6],
+        zp, zc, zo, zs, zf, zh, zn,
+        q01: q[0], q10: q[1], q25: q[2], q50: q[3], q75: q[4], q95: q[5], q99: q[6],
         logP: safeLog10(r.p),
-        logQ01: safeLog10(r.q[0]), logQ10: safeLog10(r.q[1]), logQ25: safeLog10(r.q[2]),
-        logQ50: safeLog10(r.q[3]), logQ75: safeLog10(r.q[4]), logQ95: safeLog10(r.q[5]), logQ99: safeLog10(r.q[6]),
+        logQ01: safeLog10(q[0]), logQ10: safeLog10(q[1]), logQ25: safeLog10(q[2]),
+        logQ50: safeLog10(q[3]), logQ75: safeLog10(q[4]), logQ95: safeLog10(q[5]), logQ99: safeLog10(q[6]),
         compZ: isFinite(compZ) ? Number(compZ.toFixed(2)) : null,
         compRisk: isFinite(compRisk) ? Number(compRisk.toFixed(2)) : null,
         zMappedToRiskAxis: isFinite(compZ) ? Number(((compZ + 3) / 6 * 100).toFixed(2)) : null,
         eqmRisk
       };
-    });
-  }, [rawRecords, indicators, emaSpans]);
+    }).filter(r => r !== null);
+  }, [rawRecords, indicators, emaSpans, useWalkForward]);
 
   const latestRow = useMemo(() => {
     for (let i = series.length - 1; i >= 0; i--) {
@@ -417,6 +487,7 @@ const BtcStrategistInner = () => {
     ];
   }, [chartData]);
 
+  // 3. Run Curve Backtest
   const backtest = useMemo(() => {
     if (!series.length) return null;
     const startMs = Date.parse(btStartDate + "T00:00:00Z");
@@ -597,48 +668,40 @@ const BtcStrategistInner = () => {
     }}>
       
       {/* LEFT SIDEBAR */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        width: '100%',
-        order: isMobile ? 2 : 1
-      }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', order: isMobile ? 2 : 1 }}>
         
+        {/* Model Valuation Toggle Card */}
+        <div style={{ ...cardStyle, padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ fontSize: '11px', fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#58a6ff', fontWeight: 700, textAlign: 'center' }}>
+            Base Valuation Model
+          </div>
+          <div style={{ display: 'flex', gap: '4px', backgroundColor: '#0d1117', padding: '4px', borderRadius: '6px', border: '1px solid #30363d' }}>
+            <button onClick={() => setUseWalkForward(true)} style={{ flex: 1, ...btnStyle(useWalkForward), fontSize: '11px', padding: '6px' }}>
+              Walk-Forward (Live)
+            </button>
+            <button onClick={() => setUseWalkForward(false)} style={{ flex: 1, ...btnStyle(!useWalkForward), fontSize: '11px', padding: '6px' }}>
+              Static (Full-Sample)
+            </button>
+          </div>
+        </div>
+
         {/* Today's Model Action Card */}
-        <div style={{
-          ...cardStyle,
-          border: '1px solid #3fb950',
-          boxShadow: '0 0 22px rgba(63, 185, 80, 0.14)'
-        }}>
+        <div style={{ ...cardStyle, border: '1px solid #3fb950', boxShadow: '0 0 22px rgba(63, 185, 80, 0.14)' }}>
           <div style={{ fontSize: '11px', fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#3fb950', fontWeight: 700 }}>
             Today's Model Action ({latestRow?.d || 'Live'})
           </div>
           <p style={{ fontSize: '12px', color: '#8b949e', margin: '6px 0 10px', lineHeight: 1.4 }}>
             Evaluates your active Accumulation/Distribution curve at today's Composite Risk.
           </p>
-
-          <label style={{ fontSize: '12px', color: '#8b949e', display: 'block', marginBottom: '4px' }}>
-            Your Cash Reserve (USD)
-          </label>
+          <label style={{ fontSize: '12px', color: '#8b949e', display: 'block', marginBottom: '4px' }}>Your Cash Reserve (USD)</label>
           <input
-            type="number"
-            value={todayCash}
-            min="0"
-            step="100"
+            type="number" value={todayCash} min="0" step="100"
             onChange={(e) => setTodayCash(Math.max(0, Number(e.target.value) || 0))}
-            style={{
-              width: '100%', padding: '8px', backgroundColor: '#0d1117',
-              border: '1px solid #30363d', borderRadius: '6px', color: '#e6edf3',
-              fontFamily: 'monospace', fontSize: '13px', boxSizing: 'border-box'
-            }}
+            style={{ width: '100%', padding: '8px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', color: '#e6edf3', fontFamily: 'monospace', fontSize: '13px', boxSizing: 'border-box' }}
           />
-
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #21262d', fontSize: '13px', marginTop: '8px' }}>
             <span style={{ color: '#8b949e' }}>Composite Risk Today</span>
-            <b style={{ color: riskZoneColor(todayRisk), fontFamily: 'monospace' }}>
-              {isFinite(todayRisk) ? `${todayRisk.toFixed(1)}%` : '—'}
-            </b>
+            <b style={{ color: riskZoneColor(todayRisk), fontFamily: 'monospace' }}>{isFinite(todayRisk) ? `${todayRisk.toFixed(1)}%` : '—'}</b>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #21262d', fontSize: '13px' }}>
             <span style={{ color: '#8b949e' }}>Curve Rate Today</span>
@@ -647,19 +710,11 @@ const BtcStrategistInner = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: '15px' }}>
             <span style={{ color: '#8b949e' }}>Action</span>
             <b style={{ color: todayRate > 0.0001 ? '#3fb950' : todayRate < -0.0001 ? '#f85149' : '#e6edf3' }}>
-              {todayRate > 0.0001
-                ? `BUY ${todayRate.toFixed(2)}% of Cash`
-                : todayRate < -0.0001
-                ? `SELL ${(-todayRate).toFixed(2)}% of BTC`
-                : 'HOLD — No Trade'}
+              {todayRate > 0.0001 ? `BUY ${todayRate.toFixed(2)}% of Cash` : todayRate < -0.0001 ? `SELL ${(-todayRate).toFixed(2)}% of BTC` : 'HOLD — No Trade'}
             </b>
           </div>
           <div style={{ fontSize: '12px', color: '#e6edf3', fontWeight: 600 }}>
-            {todayRate > 0.0001
-              ? `Spend ${usdExact(todaySpend)} ≈ ${todayBtcBuy.toFixed(6)} BTC`
-              : todayRate < -0.0001
-              ? `Liquidate ${(-todayRate).toFixed(2)}% of current BTC stack`
-              : 'Curve rate is 0% at current risk level'}
+            {todayRate > 0.0001 ? `Spend ${usdExact(todaySpend)} ≈ ${todayBtcBuy.toFixed(6)} BTC` : todayRate < -0.0001 ? `Liquidate ${(-todayRate).toFixed(2)}% of current BTC stack` : 'Curve rate is 0% at current risk level'}
           </div>
         </div>
 
@@ -694,10 +749,7 @@ const BtcStrategistInner = () => {
             <button
               type="button"
               onClick={() => setEmaSpans(DEFAULT_EMAS)}
-              style={{
-                background: '#21262d', border: '1px solid #30363d', color: '#8b949e',
-                borderRadius: '4px', padding: '2px 7px', fontSize: '10px', cursor: 'pointer', fontFamily: 'monospace'
-              }}
+              style={{ background: '#21262d', border: '1px solid #30363d', color: '#8b949e', borderRadius: '4px', padding: '2px 7px', fontSize: '10px', cursor: 'pointer', fontFamily: 'monospace' }}
             >
               Reset EMAs
             </button>
@@ -707,10 +759,7 @@ const BtcStrategistInner = () => {
           </p>
 
           {minToggleWarn && (
-            <div style={{
-              backgroundColor: 'rgba(248, 81, 73, 0.12)', border: '1px solid #f85149',
-              color: '#ff7b72', padding: '6px 8px', borderRadius: '5px', fontSize: '11.5px', marginBottom: '8px'
-            }}>
+            <div style={{ backgroundColor: 'rgba(248, 81, 73, 0.12)', border: '1px solid #f85149', color: '#ff7b72', padding: '6px 8px', borderRadius: '5px', fontSize: '11.5px', marginBottom: '8px' }}>
               ⚠️ At least 1 indicator must remain active to compute Composite Risk.
             </div>
           )}
@@ -720,18 +769,16 @@ const BtcStrategistInner = () => {
             ['onchain', 'Onchain Risk Composite', latestRow?.zo],
             ['cbpl', 'Cost Basis P/L Ratio', latestRow?.zc],
             ['sharpe', 'Realized P/L Sharpe', latestRow?.zs],
-            ['froth', 'Speculative Froth', latestRow?.zf],
+            ['froth', 'Price Extension (50d Froth)', latestRow?.zf],
             ['hash', 'Miner Capitulation (Hash)', latestRow?.zh],
-            ['nvt', 'Network Adoption (NVT)', latestRow?.zn],
-            ['liquidity', 'Fed Liquidity Impulse', latestRow?.zl]
+            ['nvt', 'Network Adoption (NVT)', latestRow?.zn]
           ].map(([key, label, zVal], i) => (
-            <div key={key} style={{ padding: '8px 0', borderBottom: i < 7 ? '1px solid #21262d' : 'none' }}>
+            <div key={key} style={{ padding: '8px 0', borderBottom: i < 6 ? '1px solid #21262d' : 'none' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e6edf3' }}>
                   <input
                     type="checkbox"
                     checked={indicators[key]}
-                    disabled={zVal === null || zVal === undefined}
                     onChange={(e) => handleToggleIndicator(key, e.target.checked)}
                   />
                   {label}
@@ -740,32 +787,20 @@ const BtcStrategistInner = () => {
                   {zVal !== null && zVal !== undefined && isFinite(zVal) ? `Z: ${zVal > 0 ? '+' : ''}${Number(zVal).toFixed(2)}` : 'N/A'}
                 </span>
               </div>
-
-              {/* Adjustable EMA Day Control (Clamped strictly to max 90) */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '6px', paddingLeft: '22px', gap: '8px' }}>
                 <span style={{ fontSize: '11px', color: '#8b949e', fontFamily: 'monospace' }}>
                   EMA: <strong style={{ color: '#c9d1d9' }}>{emaSpans[key]}d</strong> {emaSpans[key] === 1 ? '(Raw)' : ''}
                 </span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <input
-                    type="range"
-                    min="1"
-                    max="90"
-                    value={emaSpans[key]}
+                    type="range" min="1" max="90" value={emaSpans[key]}
                     onChange={(e) => setEmaSpans(prev => ({ ...prev, [key]: clamp(Number(e.target.value) || 1, 1, 90) }))}
                     style={{ width: '85px', accentColor: '#58a6ff', cursor: 'pointer' }}
                   />
                   <input
-                    type="number"
-                    min="1"
-                    max="90"
-                    value={emaSpans[key]}
+                    type="number" min="1" max="90" value={emaSpans[key]}
                     onChange={(e) => setEmaSpans(prev => ({ ...prev, [key]: clamp(Number(e.target.value) || 1, 1, 90) }))}
-                    style={{
-                      width: '46px', padding: '2px 4px', backgroundColor: '#0d1117',
-                      border: '1px solid #30363d', borderRadius: '4px', color: '#e6edf3',
-                      fontFamily: 'monospace', fontSize: '11px', textAlign: 'center'
-                    }}
+                    style={{ width: '46px', padding: '2px 4px', backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '4px', color: '#e6edf3', fontFamily: 'monospace', fontSize: '11px', textAlign: 'center' }}
                   />
                 </div>
               </div>
@@ -773,48 +808,17 @@ const BtcStrategistInner = () => {
           ))}
         </div>
 
-        {/* Live Rainbow Band Price Levels */}
-        <div style={cardStyle}>
-          <div style={{ fontSize: '11px', fontFamily: 'monospace', letterSpacing: '0.15em', textTransform: 'uppercase', color: '#58a6ff', marginBottom: '8px', fontWeight: 700 }}>
-            Live Rainbow Band Levels
-          </div>
-          {BAND_DEFS.map((b, i) => (
-            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: i < BAND_DEFS.length - 1 ? '1px solid #21262d' : 'none', fontSize: '12px' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                <span style={{ width: '12px', height: '8px', backgroundColor: b.color, borderRadius: '2px', display: 'inline-block' }} />
-                {b.name}
-              </span>
-              <b style={{ fontFamily: 'monospace' }}>
-                {latestRow && latestRow.q && latestRow.q.length === 7 ? `${usdShort(latestRow.q[b.loIdx])} – ${usdShort(latestRow.q[b.hiIdx])}` : '—'}
-              </b>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* RIGHT MAIN PANEL */}
-      <div style={{
-        ...cardStyle,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '14px',
-        minWidth: 0,
-        width: '100%',
-        order: isMobile ? 1 : 2
-      }}>
+      <div style={{ ...cardStyle, display: 'flex', flexDirection: 'column', gap: '14px', minWidth: 0, width: '100%', order: isMobile ? 1 : 2 }}>
         
         {/* Top Tab Bar + Export & Information Buttons */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', borderBottom: '1px solid #30363d', paddingBottom: '12px' }}>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <button onClick={() => setActiveTab('rainbow')} style={btnStyle(activeTab === 'rainbow')}>
-              🌈 Tail Rainbow
-            </button>
-            <button onClick={() => setActiveTab('composite')} style={btnStyle(activeTab === 'composite')}>
-              📊 Composite Risk & Z-Score
-            </button>
-            <button onClick={() => setActiveTab('curve')} style={btnStyle(activeTab === 'curve')}>
-              ⚙️ Accum/Dist Curve & Backtest
-            </button>
+            <button onClick={() => setActiveTab('rainbow')} style={btnStyle(activeTab === 'rainbow')}>🌈 Tail Rainbow</button>
+            <button onClick={() => setActiveTab('composite')} style={btnStyle(activeTab === 'composite')}>📊 Risk & Z-Score</button>
+            <button onClick={() => setActiveTab('curve')} style={btnStyle(activeTab === 'curve')}>⚙️ Accum/Dist Curve</button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -826,11 +830,7 @@ const BtcStrategistInner = () => {
               📸 Export Image
             </button>
 
-            <button onClick={() => setShowInfo(!showInfo)} style={{
-              ...btnStyle(showInfo),
-              borderColor: '#58a6ff',
-              color: showInfo ? '#ffffff' : '#58a6ff'
-            }}>
+            <button onClick={() => setShowInfo(!showInfo)} style={{ ...btnStyle(showInfo), borderColor: '#58a6ff', color: showInfo ? '#ffffff' : '#58a6ff' }}>
               ⓘ {showInfo ? 'Hide Math & Methodology' : 'How It’s Calculated'}
             </button>
           </div>
@@ -838,112 +838,50 @@ const BtcStrategistInner = () => {
 
         {/* Fine-Tuned Timeframe Controls Bar */}
         {activeTab !== 'curve' && (
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: '10px',
-            backgroundColor: '#0d1117',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            border: '1px solid #21262d'
-          }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', backgroundColor: '#0d1117', padding: '8px 12px', borderRadius: '6px', border: '1px solid #21262d' }}>
             <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: '11px', color: '#8b949e', marginRight: '4px', fontFamily: 'monospace' }}>Range:</span>
-              {[
-                ['1M', '1M'],
-                ['3M', '3M'],
-                ['6M', '6M'],
-                ['YTD', 'YTD'],
-                ['1Y', '1Y'],
-                ['2Y', '2Y'],
-                ['4Y', '4Y (Cycle)'],
-                ['2020', '2020+'],
-                ['2017', '2017+'],
-                ['ALL', 'ALL']
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => applyTimeframePreset(key)}
-                  style={{
-                    ...btnStyle(tfPreset === key),
-                    padding: '4px 8px',
-                    fontSize: '11px'
-                  }}
-                >
-                  {label}
-                </button>
+              {[['1M', '1M'], ['3M', '3M'], ['6M', '6M'], ['YTD', 'YTD'], ['1Y', '1Y'], ['2Y', '2Y'], ['4Y', '4Y (Cycle)'], ['2020', '2020+'], ['2017', '2017+'], ['ALL', 'ALL']].map(([key, label]) => (
+                <button key={key} onClick={() => applyTimeframePreset(key)} style={{ ...btnStyle(tfPreset === key), padding: '4px 8px', fontSize: '11px' }}>{label}</button>
               ))}
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '11px', color: '#8b949e', fontFamily: 'monospace' }}>Custom:</span>
-              <input
-                type="date"
-                value={customStart}
-                style={inputDateStyle}
-                onChange={(e) => { setCustomStart(e.target.value); setTfPreset('CUSTOM'); }}
-              />
+              <input type="date" value={customStart} style={inputDateStyle} onChange={(e) => { setCustomStart(e.target.value); setTfPreset('CUSTOM'); }} />
               <span style={{ color: '#8b949e', fontSize: '11px' }}>to</span>
-              <input
-                type="date"
-                value={customEnd}
-                style={inputDateStyle}
-                onChange={(e) => { setCustomEnd(e.target.value); setTfPreset('CUSTOM'); }}
-              />
+              <input type="date" value={customEnd} style={inputDateStyle} onChange={(e) => { setCustomEnd(e.target.value); setTfPreset('CUSTOM'); }} />
             </div>
           </div>
         )}
 
         {/* Comprehensive Collapsible Math & Methodology Drawer */}
         {showInfo && (
-          <div style={{
-            backgroundColor: '#0d1117',
-            border: '1px solid #58a6ff66',
-            borderLeft: '3px solid #58a6ff',
-            borderRadius: '6px',
-            padding: '14px',
-            fontSize: '12.5px',
-            lineHeight: 1.55,
-            color: '#c9d1d9',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '14px'
-          }}>
+          <div style={{ backgroundColor: '#0d1117', border: '1px solid #58a6ff66', borderLeft: '3px solid #58a6ff', borderRadius: '6px', padding: '14px', fontSize: '12.5px', lineHeight: 1.55, color: '#c9d1d9', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px' }}>
             <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
-              <strong style={{ color: '#f3cd7a', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
-                1. Walk-Forward Asymmetric Tail Curvature Rainbow (Dynamic RAQQR)
-              </strong>
+              <strong style={{ color: '#f3cd7a', display: 'block', marginBottom: '6px', fontSize: '13px' }}>1. Walk-Forward Asymmetric Tail Curvature Rainbow (Dynamic RAQQR)</strong>
               This valuation model enforces <strong>Zero Look-Ahead Bias</strong>. Every single day, it runs a live quadratic regression on the entire historical dataset up to that exact day. 
               <br/><br/>
               It models conditional quantiles of <code>log10(BTC Price)</code> as a centered quadratic in log-time. It extracts the historical residuals of the fit to map exactly where the 1st, 10th, 25th, 50th, 75th, 95th, and 99th percentiles have historically traded. If a long squeeze breaks the model (like in 2020), the live walk-forward algorithm physically bends the rails downwards to adapt and learn for the future.
             </div>
 
             <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
-              <strong style={{ color: '#22c55e', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
-                2. Diversified Composite Z-Score & Valuation Risk %
-              </strong>
+              <strong style={{ color: '#22c55e', display: 'block', marginBottom: '6px', fontSize: '13px' }}>2. Diversified Composite Z-Score & Valuation Risk %</strong>
               Each enabled indicator in the left sidebar casts an equal-weighted vote in <code>[-3, +3]</code> (where <code>+Z</code> = undervalued/buy and <code>-Z</code> = overvalued/sell). We combine on-chain data, derivatives froth, macro liquidity, and price action to generate a holistic risk score.
               <ul style={{ margin: '6px 0', paddingLeft: '18px', fontSize: '12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
                 <li><strong>Price Valuation (Walk-Forward):</strong> Position within the Q1%–Q99% log-time rainbow.</li>
                 <li><strong>Cost Basis P/L Ratio:</strong> Log ratio of total unrealized profit to unrealized loss across the UTXO cost-basis histogram.</li>
                 <li><strong>Onchain Risk Composite:</strong> Weighted blend of 8 on-chain metrics (MVRV, NUPL, Puell, LTH PVR).</li>
                 <li><strong>Realized P/L Sharpe:</strong> Rolling realized P/L Sharpe mapped to a Z-score.</li>
-                <li><strong>Speculative Froth:</strong> Price extension vs 50-day moving average (identifies excessive derivatives greed).</li>
+                <li><strong>Price Extension (50d Froth):</strong> Price extension vs 50-day moving average (identifies excessive derivatives greed).</li>
                 <li><strong>Miner Capitulation (Hash Ribbons):</strong> 30d vs 60d Hash Rate. Unprofitable miner capitulation marks generational bottoms.</li>
                 <li><strong>Network Adoption (NVT):</strong> Market Cap divided by On-chain USD Transaction Volume (Bitcoin's P/E ratio).</li>
-                <li><strong>Hoagie Net Liquidity Impulse:</strong> 90-day momentum of Net Fed Liquidity (WALCL − TGA − RRP + Facilities).</li>
               </ul>
-              <code style={{ color: '#79c0ff', display: 'block', marginTop: '4px', fontSize: '11.5px' }}>
-                Composite Risk % = clamp(50 - (Composite_Z / 3) × 50, 0, 100)
-              </code>
+              <code style={{ color: '#79c0ff', display: 'block', marginTop: '4px', fontSize: '11.5px' }}>Composite Risk % = clamp(50 - (Composite_Z / 3) × 50, 0, 100)</code>
             </div>
 
             <div style={{ backgroundColor: '#161b22', padding: '12px', borderRadius: '6px', border: '1px solid #30363d', gridColumn: '1 / -1' }}>
-              <strong style={{ color: '#58a6ff', display: 'block', marginBottom: '6px', fontSize: '13px' }}>
-                3. Accum/Dist Curve & Backtester
-              </strong>
+              <strong style={{ color: '#58a6ff', display: 'block', marginBottom: '6px', fontSize: '13px' }}>3. Accum/Dist Curve & Backtester</strong>
               Maps each day's <strong>Composite Risk (0–100%)</strong> across 21 draggable nodes (in 5% increments) to a daily trade rate <code>r_t ∈ [-10%, +10%]</code>:
               <ul style={{ margin: '6px 0', paddingLeft: '18px', fontSize: '12px' }}>
                 <li><strong style={{ color: '#3fb950' }}>Green Accumulation Zone (r_t &gt; 0%):</strong> Spends <code>r_t%</code> of your remaining USD Cash Reserve into BTC that day.</li>
@@ -968,17 +906,8 @@ const BtcStrategistInner = () => {
                 <ComposedChart data={chartData} margin={{ top: 10, right: isMobile ? 5 : 20, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#21262d" vertical={false} />
                   <XAxis dataKey="d" stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} minTickGap={isMobile ? 40 : 60} />
-                  <YAxis
-                    domain={['auto', 'auto']}
-                    stroke="#8b949e"
-                    tick={{ fill: '#8b949e', fontSize: 11 }}
-                    tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))}
-                    width={isMobile ? 52 : 68}
-                  />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
-                    formatter={(val, name) => [usdExact(Math.pow(10, Number(val))), name]}
-                  />
+                  <YAxis domain={['auto', 'auto']} stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))} width={isMobile ? 52 : 68} />
+                  <Tooltip contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }} formatter={(val, name) => [usdExact(Math.pow(10, Number(val))), name]} />
                   <Legend wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '8px' }} />
                   <Line type="monotone" dataKey="logQ99" name="Q99% Bubble Rail" stroke="#f85149" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                   <Line type="monotone" dataKey="logQ95" name="Q95% Hot" stroke="#f0883e" strokeWidth={1.2} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
@@ -994,7 +923,7 @@ const BtcStrategistInner = () => {
           </div>
         )}
 
-        {/* TAB 2: COMPOSITE RISK & Z-SCORE (Exact Threshold Color Locking across all zoom levels) */}
+        {/* TAB 2: COMPOSITE RISK & Z-SCORE */}
         {activeTab === 'composite' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px', flexWrap: 'wrap', gap: '10px' }}>
@@ -1003,18 +932,10 @@ const BtcStrategistInner = () => {
                   Composite Valuation Risk (Exact Threshold Color Locking)
                 </h3>
                 <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap', fontSize: '11px', fontFamily: 'monospace' }}>
-                  <span style={{ padding: '3px 8px', border: '1px solid #22c55e', color: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)', borderRadius: '4px' }}>
-                    0–25% Buy Zone (Z: +1.5 to +3)
-                  </span>
-                  <span style={{ padding: '3px 8px', border: '1px solid #95d81d', color: '#95d81d', backgroundColor: 'rgba(149,216,29,0.1)', borderRadius: '4px' }}>
-                    25–50% Accumulate (Z: 0 to +1.5)
-                  </span>
-                  <span style={{ padding: '3px 8px', border: '1px solid #f59e0b', color: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', borderRadius: '4px' }}>
-                    50–75% Trim (Z: 0 to -1.5)
-                  </span>
-                  <span style={{ padding: '3px 8px', border: '1px solid #ff4444', color: '#ff4444', backgroundColor: 'rgba(255,68,68,0.1)', borderRadius: '4px' }}>
-                    75–100% Sell Zone (Z: -1.5 to -3)
-                  </span>
+                  <span style={{ padding: '3px 8px', border: '1px solid #22c55e', color: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)', borderRadius: '4px' }}>0–25% Buy Zone</span>
+                  <span style={{ padding: '3px 8px', border: '1px solid #95d81d', color: '#95d81d', backgroundColor: 'rgba(149,216,29,0.1)', borderRadius: '4px' }}>25–50% Accumulate</span>
+                  <span style={{ padding: '3px 8px', border: '1px solid #f59e0b', color: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', borderRadius: '4px' }}>50–75% Trim</span>
+                  <span style={{ padding: '3px 8px', border: '1px solid #ff4444', color: '#ff4444', backgroundColor: 'rgba(255,68,68,0.1)', borderRadius: '4px' }}>75–100% Sell Zone</span>
                 </div>
               </div>
 
@@ -1036,65 +957,23 @@ const BtcStrategistInner = () => {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#21262d" vertical={false} />
                   <XAxis dataKey="d" stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} minTickGap={isMobile ? 40 : 60} />
-                  <YAxis
-                    yAxisId="left"
-                    domain={['auto', 'auto']}
-                    stroke="#8b949e"
-                    tick={{ fill: '#8b949e', fontSize: 11 }}
-                    tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))}
-                    width={isMobile ? 52 : 64}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    domain={[0, 100]}
-                    ticks={[0, 25, 50, 75, 100]}
-                    stroke="#8b949e"
-                    tick={{ fill: '#8b949e', fontSize: 11 }}
-                    tickFormatter={(v) => `${v}%`}
-                    width={44}
-                  />
+                  <YAxis yAxisId="left" domain={['auto', 'auto']} stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} tickFormatter={(v) => usdShort(Math.pow(10, Number(v)))} width={isMobile ? 52 : 64} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} tickFormatter={(v) => `${v}%`} width={44} />
                   <ReferenceLine yAxisId="right" y={25} stroke="#22c55e" strokeOpacity={0.75} strokeDasharray="3 3" />
                   <ReferenceLine yAxisId="right" y={50} stroke="#8b949e" strokeOpacity={0.75} strokeDasharray="4 4" />
                   <ReferenceLine yAxisId="right" y={75} stroke="#ff4444" strokeOpacity={0.75} strokeDasharray="3 3" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
-                    formatter={(val, name, props) => {
-                      if (name === 'BTC Price') return [usdExact(Math.pow(10, Number(val))), name];
-                      if (name === 'Composite Z-Score') {
-                        const rawZ = props?.payload?.compZ;
-                        return [rawZ !== null && isFinite(rawZ) ? `${rawZ > 0 ? '+' : ''}${rawZ.toFixed(2)}` : '—', name];
-                      }
-                      return [`${Number(val).toFixed(1)}%`, name];
-                    }}
-                  />
+                  <Tooltip contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }} formatter={(val, name, props) => {
+                    if (name === 'BTC Price') return [usdExact(Math.pow(10, Number(val))), name];
+                    if (name === 'Composite Z-Score') {
+                      const rawZ = props?.payload?.compZ;
+                      return [rawZ !== null && isFinite(rawZ) ? `${rawZ > 0 ? '+' : ''}${rawZ.toFixed(2)}` : '—', name];
+                    }
+                    return [`${Number(val).toFixed(1)}%`, name];
+                  }} />
                   <Legend wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '8px' }} />
                   <Line yAxisId="left" type="monotone" dataKey="logP" name="BTC Price" stroke="rgba(230,237,243,0.75)" strokeWidth={1.6} dot={false} isAnimationActive={false} />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="compRisk"
-                    name="Composite Risk %"
-                    stroke="url(#compRiskZoneGrad)"
-                    strokeWidth={3}
-                    dot={false}
-                    connectNulls={false}
-                    isAnimationActive={false}
-                  />
-                  {showZLine && (
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey="zMappedToRiskAxis"
-                      name="Composite Z-Score"
-                      stroke="rgba(88, 166, 255, 0.55)"
-                      strokeWidth={1.4}
-                      strokeDasharray="3 3"
-                      dot={false}
-                      connectNulls={false}
-                      isAnimationActive={false}
-                    />
-                  )}
+                  <Line yAxisId="right" type="monotone" dataKey="compRisk" name="Composite Risk %" stroke="url(#compRiskZoneGrad)" strokeWidth={3} dot={false} connectNulls={false} isAnimationActive={false} />
+                  {showZLine && <Line yAxisId="right" type="monotone" dataKey="zMappedToRiskAxis" name="Composite Z-Score" stroke="rgba(88, 166, 255, 0.55)" strokeWidth={1.4} strokeDasharray="3 3" dot={false} connectNulls={false} isAnimationActive={false} />}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -1121,14 +1000,7 @@ const BtcStrategistInner = () => {
 
             {/* 21-Node Interactive SVG Curve Editor */}
             <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', padding: isMobile ? '6px' : '10px' }}>
-              <svg
-                ref={svgRef}
-                viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-                style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'none', userSelect: 'none' }}
-                onPointerMove={handlePointerMove}
-                onPointerUp={() => setDraggingIdx(null)}
-                onPointerLeave={() => setDraggingIdx(null)}
-              >
+              <svg ref={svgRef} viewBox={`0 0 ${SVG_W} ${SVG_H}`} style={{ width: '100%', height: 'auto', display: 'block', touchAction: 'none', userSelect: 'none' }} onPointerMove={handlePointerMove} onPointerUp={() => setDraggingIdx(null)} onPointerLeave={() => setDraggingIdx(null)}>
                 <rect x={PAD_L} y={PAD_T} width={PLOT_W} height={PLOT_H / 2} fill="rgba(63,185,80,0.08)" />
                 <rect x={PAD_L} y={PAD_T + PLOT_H / 2} width={PLOT_W} height={PLOT_H / 2} fill="rgba(248,81,73,0.08)" />
                 {[-10, -5, 0, 5, 10].map(v => {
@@ -1136,55 +1008,25 @@ const BtcStrategistInner = () => {
                   return (
                     <g key={v}>
                       <line x1={PAD_L} x2={PAD_L + PLOT_W} y1={y} y2={y} stroke={v === 0 ? "#8b949e" : "#21262d"} strokeWidth={v === 0 ? 1.5 : 1} />
-                      <text x={PAD_L - 6} y={y + 4} fill="#8b949e" fontSize="10" textAnchor="end" fontFamily="monospace">
-                        {v > 0 ? `+${v}%` : `${v}%`}
-                      </text>
+                      <text x={PAD_L - 6} y={y + 4} fill="#8b949e" fontSize="10" textAnchor="end" fontFamily="monospace">{v > 0 ? `+${v}%` : `${v}%`}</text>
                     </g>
                   );
                 })}
-                {CURVE_RISK_NODES.map((r) => {
-                  const x = pxX(r);
-                  return (
-                    <g key={r}>
-                      <line x1={x} x2={x} y1={PAD_T} y2={PAD_T + PLOT_H} stroke={r % 10 === 0 ? "#21262d" : "#161b22"} />
-                      {r % 10 === 0 && (
-                        <text x={x} y={SVG_H - 8} fill="#8b949e" fontSize="10" textAnchor="middle" fontFamily="monospace">
-                          {r}%
-                        </text>
-                      )}
-                    </g>
-                  );
-                })}
-                <path
-                  d={CURVE_RISK_NODES.map((r, i) => `${i === 0 ? 'M' : 'L'}${pxX(r)},${pxY(curveNodes[i])}`).join(' ')}
-                  fill="none"
-                  stroke="#58a6ff"
-                  strokeWidth="2.5"
-                />
+                {CURVE_RISK_NODES.map((r) => (
+                  <g key={r}>
+                    <line x1={pxX(r)} x2={pxX(r)} y1={PAD_T} y2={PAD_T + PLOT_H} stroke={r % 10 === 0 ? "#21262d" : "#161b22"} />
+                    {r % 10 === 0 && <text x={pxX(r)} y={SVG_H - 8} fill="#8b949e" fontSize="10" textAnchor="middle" fontFamily="monospace">{r}%</text>}
+                  </g>
+                ))}
+                <path d={CURVE_RISK_NODES.map((r, i) => `${i === 0 ? 'M' : 'L'}${pxX(r)},${pxY(curveNodes[i])}`).join(' ')} fill="none" stroke="#58a6ff" strokeWidth="2.5" />
                 {CURVE_RISK_NODES.map((r, i) => {
                   const cx = pxX(r), cy = pxY(curveNodes[i]);
                   const val = curveNodes[i];
                   const fill = val > 0.05 ? "#3fb950" : val < -0.05 ? "#f85149" : "#8b949e";
                   return (
                     <g key={r}>
-                      {draggingIdx === i && (
-                        <text x={cx} y={val >= 0 ? cy - 12 : cy + 20} fill="#ffffff" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="monospace">
-                          {val > 0 ? `+${val.toFixed(1)}%` : `${val.toFixed(1)}%`}
-                        </text>
-                      )}
-                      <circle
-                        cx={cx}
-                        cy={cy}
-                        r={isMobile ? 9 : 6}
-                        fill={fill}
-                        stroke="#0d1117"
-                        strokeWidth="1.5"
-                        style={{ cursor: 'grab' }}
-                        onPointerDown={(e) => {
-                          e.target.setPointerCapture?.(e.pointerId);
-                          setDraggingIdx(i);
-                        }}
-                      />
+                      {draggingIdx === i && <text x={cx} y={val >= 0 ? cy - 12 : cy + 20} fill="#ffffff" fontSize="11" fontWeight="bold" textAnchor="middle" fontFamily="monospace">{val > 0 ? `+${val.toFixed(1)}%` : `${val.toFixed(1)}%`}</text>}
+                      <circle cx={cx} cy={cy} r={isMobile ? 9 : 6} fill={fill} stroke="#0d1117" strokeWidth="1.5" style={{ cursor: 'grab' }} onPointerDown={(e) => { e.target.setPointerCapture?.(e.pointerId); setDraggingIdx(i); }} />
                     </g>
                   );
                 })}
@@ -1196,40 +1038,15 @@ const BtcStrategistInner = () => {
               <div style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', borderRadius: '6px', padding: '12px' }}>
                 <div style={{ fontSize: '11px', color: '#8b949e', marginBottom: '6px', fontFamily: 'monospace' }}>Quick Start Presets:</div>
                 <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                  {[
-                    ['2015', '2015-01-01'],
-                    ['2017', '2017-01-01'],
-                    ['2018', '2018-01-01'],
-                    ['2020', '2020-01-01'],
-                    ['2022', '2022-01-01'],
-                    ['2024', '2024-01-01']
-                  ].map(([lbl, dt]) => (
-                    <button
-                      key={lbl}
-                      onClick={() => setBtStartDate(dt)}
-                      style={{ ...btnStyle(btStartDate === dt), padding: '4px 8px', fontSize: '11px' }}
-                    >
-                      {lbl}
-                    </button>
+                  {[['2015', '2015-01-01'], ['2017', '2017-01-01'], ['2018', '2018-01-01'], ['2020', '2020-01-01'], ['2022', '2022-01-01'], ['2024', '2024-01-01']].map(([lbl, dt]) => (
+                    <button key={lbl} onClick={() => setBtStartDate(dt)} style={{ ...btnStyle(btStartDate === dt), padding: '4px 8px', fontSize: '11px' }}>{lbl}</button>
                   ))}
                 </div>
 
                 <label style={{ fontSize: '12px', color: '#8b949e', display: 'block', marginBottom: '4px' }}>Starting Date</label>
-                <input
-                  type="date"
-                  value={btStartDate}
-                  onChange={(e) => setBtStartDate(e.target.value)}
-                  style={{ width: '100%', padding: '7px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', color: '#fff', colorScheme: 'dark', marginBottom: '10px', boxSizing: 'border-box' }}
-                />
+                <input type="date" value={btStartDate} onChange={(e) => setBtStartDate(e.target.value)} style={{ width: '100%', padding: '7px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', color: '#fff', colorScheme: 'dark', marginBottom: '10px', boxSizing: 'border-box' }} />
                 <label style={{ fontSize: '12px', color: '#8b949e', display: 'block', marginBottom: '4px' }}>Starting Capital (USD)</label>
-                <input
-                  type="number"
-                  value={btStartingCash}
-                  min="100"
-                  step="500"
-                  onChange={(e) => setBtStartingCash(Math.max(0, Number(e.target.value) || 0))}
-                  style={{ width: '100%', padding: '7px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }}
-                />
+                <input type="number" value={btStartingCash} min="100" step="500" onChange={(e) => setBtStartingCash(Math.max(0, Number(e.target.value) || 0))} style={{ width: '100%', padding: '7px', backgroundColor: '#161b22', border: '1px solid #30363d', borderRadius: '4px', color: '#fff', fontFamily: 'monospace', boxSizing: 'border-box' }} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: '#c9d1d9', marginTop: '12px', cursor: 'pointer' }}>
                   <input type="checkbox" checked={btLogScale} onChange={(e) => setBtLogScale(e.target.checked)} />
                   Log10 Scale Equity Curve
@@ -1277,53 +1094,15 @@ const BtcStrategistInner = () => {
                     <ComposedChart data={backtest.plotHistory} margin={{ top: 10, right: isMobile ? 5 : 20, left: 0, bottom: 5 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#21262d" vertical={false} />
                       <XAxis dataKey="d" stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} minTickGap={isMobile ? 40 : 60} />
-                      <YAxis
-                        yAxisId="equity"
-                        domain={['auto', 'auto']}
-                        stroke="#8b949e"
-                        tick={{ fill: '#8b949e', fontSize: 11 }}
-                        tickFormatter={(v) => btLogScale ? usdShort(Math.pow(10, Number(v))) : usdShort(Number(v))}
-                        width={isMobile ? 52 : 68}
-                      />
+                      <YAxis yAxisId="equity" domain={['auto', 'auto']} stroke="#8b949e" tick={{ fill: '#8b949e', fontSize: 11 }} tickFormatter={(v) => btLogScale ? usdShort(Math.pow(10, Number(v))) : usdShort(Number(v))} width={isMobile ? 52 : 68} />
                       <YAxis yAxisId="zone" domain={[0, 1]} hide={true} />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }}
-                        formatter={(val, name) => {
-                          if (name === 'Accumulation Zone' || name === 'Distribution Zone') return [null, null];
-                          return [
-                            btLogScale ? usdExact(Math.pow(10, Number(val))) : usdExact(Number(val)),
-                            name
-                          ];
-                        }}
-                      />
-                      <Legend
-                        wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '8px' }}
-                        formatter={(value) => (value === 'Accumulation Zone' || value === 'Distribution Zone' ? null : value)}
-                      />
-                      <Area
-                        yAxisId="zone"
-                        type="stepAfter"
-                        dataKey="accZoneBg"
-                        name="Accumulation Zone"
-                        legendType="none"
-                        tooltipType="none"
-                        stroke="none"
-                        fill="#22c55e"
-                        fillOpacity={0.18}
-                        isAnimationActive={false}
-                      />
-                      <Area
-                        yAxisId="zone"
-                        type="stepAfter"
-                        dataKey="distZoneBg"
-                        name="Distribution Zone"
-                        legendType="none"
-                        tooltipType="none"
-                        stroke="none"
-                        fill="#ef4444"
-                        fillOpacity={0.22}
-                        isAnimationActive={false}
-                      />
+                      <Tooltip contentStyle={{ backgroundColor: '#0d1117', borderColor: '#30363d', color: '#e6edf3', fontSize: '12px' }} formatter={(val, name) => {
+                        if (name === 'Accumulation Zone' || name === 'Distribution Zone') return [null, null];
+                        return [btLogScale ? usdExact(Math.pow(10, Number(val))) : usdExact(Number(val)), name];
+                      }} />
+                      <Legend wrapperStyle={{ fontSize: isMobile ? '11px' : '12px', paddingTop: '8px' }} formatter={(value) => (value === 'Accumulation Zone' || value === 'Distribution Zone' ? null : value)} />
+                      <Area yAxisId="zone" type="stepAfter" dataKey="accZoneBg" name="Accumulation Zone" legendType="none" tooltipType="none" stroke="none" fill="#22c55e" fillOpacity={0.18} isAnimationActive={false} />
+                      <Area yAxisId="zone" type="stepAfter" dataKey="distZoneBg" name="Distribution Zone" legendType="none" tooltipType="none" stroke="none" fill="#ef4444" fillOpacity={0.22} isAnimationActive={false} />
                       <Line yAxisId="equity" type="monotone" dataKey="plotPortfolio" name="Strategic DCA Portfolio (BTC + Cash)" stroke="#f3cd7a" strokeWidth={2.5} dot={false} isAnimationActive={false} />
                       <Line yAxisId="equity" type="monotone" dataKey="plotBuyHold" name="Buy & Hold (Day 1 Lump Sum)" stroke="#8b949e" strokeWidth={1.6} dot={false} isAnimationActive={false} />
                       <Line yAxisId="equity" type="monotone" dataKey="plotCash" name="Cash Reserve" stroke="#3fb950" strokeWidth={1.3} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
