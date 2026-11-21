@@ -4,18 +4,10 @@ import {
 } from 'recharts';
 import BtcStrategist from './BtcStrategist';
 
-// --- PASSCODE CONFIGURATION (SHA-256 HASH) ---
+// --- PASSCODE CONFIGURATION (BASE64) ---
 // Current passcode is: HoagieTrades2026
-const BTC_PASSCODE_SHA256 = "9d065da1ce85769aa864758ef29e6ca1ff500c6aa5c4a7b249e2605d5f476db5";
-const STORAGE_AUTH_KEY = "hoagie_btc_dca_auth_v2";
-
-async function sha256Hex(text) {
-  const data = new TextEncoder().encode(String(text).trim());
-  const hashBuffer = await window.crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+const BTC_PASSCODE_B64 = "SG9hZ2llVHJhZGVzMjAyNg==";
+const STORAGE_AUTH_KEY = "hoagie_btc_dca_auth_v3";
 
 // --- UTILS ---
 const formatCurrencyAxis = (value) => {
@@ -225,7 +217,7 @@ const App = () => {
   // Passcode Gate State
   const [btcUnlocked, setBtcUnlocked] = useState(() => {
     try {
-      return localStorage.getItem(STORAGE_AUTH_KEY) === BTC_PASSCODE_SHA256;
+      return localStorage.getItem(STORAGE_AUTH_KEY) === BTC_PASSCODE_B64;
     } catch (_) {
       return false;
     }
@@ -241,22 +233,22 @@ const App = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const handlePasscodeSubmit = async (e) => {
+  const handlePasscodeSubmit = (e) => {
     e.preventDefault();
     setPasscodeError('');
     try {
-      const hashed = await sha256Hex(passcodeInput);
-      if (hashed === BTC_PASSCODE_SHA256.toLowerCase()) {
+      const inputB64 = btoa(passcodeInput.trim());
+      if (inputB64 === BTC_PASSCODE_B64) {
         setBtcUnlocked(true);
         setPasscodeInput('');
         try {
-          localStorage.setItem(STORAGE_AUTH_KEY, BTC_PASSCODE_SHA256.toLowerCase());
+          localStorage.setItem(STORAGE_AUTH_KEY, BTC_PASSCODE_B64);
         } catch (_) {}
       } else {
         setPasscodeError('Invalid passcode. Please check with Hoagie_Trades for access.');
       }
     } catch (err) {
-      setPasscodeError('Browser crypto check failed.');
+      setPasscodeError('Browser encoding check failed.');
     }
   };
 
