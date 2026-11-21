@@ -34,9 +34,6 @@ const BAND_DEFS = [
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const safeLog10 = (v) => (isFinite(v) && v > 0 ? Math.log10(v) : null);
 
-/**
- * Native SVG to High-Res PNG Exporter
- */
 function exportChartAsPNG(containerId, fileName) {
   const container = document.getElementById(containerId);
   if (!container) return;
@@ -67,9 +64,6 @@ function exportChartAsPNG(containerId, fileName) {
   img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
 }
 
-/**
- * Re-smooths a causal EMA series from its baked-in baseSpan to user targetSpan.
- */
 function reSmoothCausalEma(values, baseSpan, targetSpan) {
   const bSpan = Math.max(1, Number(baseSpan) || 1);
   const tSpan = clamp(Math.round(Number(targetSpan) || bSpan), 1, 120);
@@ -210,20 +204,19 @@ const BtcStrategistInner = () => {
   const [customStart, setCustomStart] = useState('2017-01-01');
   const [customEnd, setCustomEnd] = useState('');
 
-  // Fixed Defaults (Price & Onchain = True)
+  // Fixed Defaults: Price, Onchain = True. CBPL, Sharpe, Froth, Liquidity = False.
   const [indicators, setIndicators] = useState({
     price: true,
-    cbpl: false,
     onchain: true,
+    cbpl: false,
     sharpe: false,
     froth: false,
-    hash: false,
-    nvt: false
+    liquidity: false
   });
   const [minToggleWarn, setMinToggleWarn] = useState(false);
 
-  // Adjusted EMAs: 1D for Price, 14D for Everything Else
-  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14, froth: 14, hash: 14, nvt: 14 };
+  // Adjusted EMAs: 1D for Price & Froth. 14D for CBPL, Onchain, Sharpe, Liquidity.
+  const DEFAULT_EMAS = { price: 1, cbpl: 14, onchain: 14, sharpe: 14, froth: 1, liquidity: 14 };
   const [emaSpans, setEmaSpans] = useState(DEFAULT_EMAS);
 
   const [todayCash, setTodayCash] = useState(10000);
@@ -289,11 +282,8 @@ const BtcStrategistInner = () => {
               .map(([ms, p]) => {
                 const q = raqqrPricesAtMs(ms);
                 return {
-                  ms,
-                  d: new Date(ms).toISOString().slice(0, 10),
-                  p,
-                  q_static: q,
-                  q_wf: q,
+                  ms, d: new Date(ms).toISOString().slice(0, 10), p,
+                  q_static: q, q_wf: q,
                   zs: getZ(seed.sharpe, ms),
                   zc: getZ(seed.cbpl, ms),
                   zo: getZ(seed.onchain, ms)
@@ -317,20 +307,12 @@ const BtcStrategistInner = () => {
             
             const prev = records[records.length - 1];
             const qStaticLive = raqqrPricesAtMs(todayMs);
-            const qWfLive = prev.q_wf || prev.q_static || prev.q; // Carry forward WF bands to today
+            const qWfLive = prev.q_wf || prev.q_static || prev.q;
 
             const updatedRow = {
-              ms: todayMs,
-              d: todayStr,
-              p: livePrice,
-              q_static: qStaticLive,
-              q_wf: qWfLive,
-              zs: prev.zs,
-              zc: prev.zc,
-              zo: prev.zo,
-              zf: prev.zf,
-              zh: prev.zh,
-              zn: prev.zn
+              ms: todayMs, d: todayStr, p: livePrice,
+              q_static: qStaticLive, q_wf: qWfLive,
+              zs: prev.zs, zc: prev.zc, zo: prev.zo, zf: prev.zf, zl: prev.zl
             };
             
             if (prev.d === todayStr) {
@@ -391,8 +373,6 @@ const BtcStrategistInner = () => {
     const valid = rawRecords.filter(r => r && isFinite(r.p) && r.p > 0);
     if (!valid.length) return [];
 
-    // Evaluate Z-Price mathematically here using the selected model's Q arrays
-    // This allows instant UI swapping between Static and Walk-Forward without re-fetching
     const zPriceArr = valid.map(r => {
       const q = (useWalkForward && r.q_wf && r.q_wf.length === 7) ? r.q_wf : (r.q_static || r.q);
       if (!q || q.length < 7) return null;
@@ -404,15 +384,14 @@ const BtcStrategistInner = () => {
     const zoArr = reSmoothCausalEma(valid.map(r => r.zo), 7, emaSpans.onchain);
     const zsArr = reSmoothCausalEma(valid.map(r => r.zs), 14, emaSpans.sharpe);
     const zfArr = reSmoothCausalEma(valid.map(r => r.zf), 1, emaSpans.froth);
-    const zhArr = reSmoothCausalEma(valid.map(r => r.zh), 1, emaSpans.hash);
-    const znArr = reSmoothCausalEma(valid.map(r => r.zn), 1, emaSpans.nvt);
+    const zlArr = reSmoothCausalEma(valid.map(r => r.zl), 1, emaSpans.liquidity);
 
     return valid.map((r, i) => {
       const q = (useWalkForward && r.q_wf && r.q_wf.length === 7) ? r.q_wf : (r.q_static || r.q);
       if (!q || q.length < 7) return null;
 
       const zp = zpArr[i], zc = zcArr[i], zo = zoArr[i], zs = zsArr[i];
-      const zf = zfArr[i], zh = zhArr[i], zn = znArr[i];
+      const zf = zfArr[i], zl = zlArr[i];
 
       const votes = [];
       if (indicators.price && zp !== null) votes.push(zp);
@@ -420,8 +399,7 @@ const BtcStrategistInner = () => {
       if (indicators.onchain && zo !== null) votes.push(zo);
       if (indicators.sharpe && zs !== null) votes.push(zs);
       if (indicators.froth && zf !== null) votes.push(zf);
-      if (indicators.hash && zh !== null) votes.push(zh);
-      if (indicators.nvt && zn !== null) votes.push(zn);
+      if (indicators.liquidity && zl !== null) votes.push(zl);
 
       let compZ = NaN;
       if (votes.length > 0 && votes.every(v => isFinite(v))) {
@@ -432,7 +410,7 @@ const BtcStrategistInner = () => {
 
       return {
         ...r,
-        zp, zc, zo, zs, zf, zh, zn,
+        zp, zc, zo, zs, zf, zl,
         q01: q[0], q10: q[1], q25: q[2], q50: q[3], q75: q[4], q95: q[5], q99: q[6],
         logP: safeLog10(r.p),
         logQ01: safeLog10(q[0]), logQ10: safeLog10(q[1]), logQ25: safeLog10(q[2]),
@@ -487,7 +465,6 @@ const BtcStrategistInner = () => {
     ];
   }, [chartData]);
 
-  // 3. Run Curve Backtest
   const backtest = useMemo(() => {
     if (!series.length) return null;
     const startMs = Date.parse(btStartDate + "T00:00:00Z");
@@ -770,15 +747,15 @@ const BtcStrategistInner = () => {
             ['cbpl', 'Cost Basis P/L Ratio', latestRow?.zc],
             ['sharpe', 'Realized P/L Sharpe', latestRow?.zs],
             ['froth', 'Price Extension (50d Froth)', latestRow?.zf],
-            ['hash', 'Miner Capitulation (Hash)', latestRow?.zh],
-            ['nvt', 'Network Adoption (NVT)', latestRow?.zn]
+            ['liquidity', 'Hoagie Net Fed Liquidity', latestRow?.zl]
           ].map(([key, label, zVal], i) => (
-            <div key={key} style={{ padding: '8px 0', borderBottom: i < 6 ? '1px solid #21262d' : 'none' }}>
+            <div key={key} style={{ padding: '8px 0', borderBottom: i < 5 ? '1px solid #21262d' : 'none' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12.5px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#e6edf3' }}>
                   <input
                     type="checkbox"
                     checked={indicators[key]}
+                    disabled={zVal === null || zVal === undefined}
                     onChange={(e) => handleToggleIndicator(key, e.target.checked)}
                   />
                   {label}
@@ -874,8 +851,7 @@ const BtcStrategistInner = () => {
                 <li><strong>Onchain Risk Composite:</strong> Weighted blend of 8 on-chain metrics (MVRV, NUPL, Puell, LTH PVR).</li>
                 <li><strong>Realized P/L Sharpe:</strong> Rolling realized P/L Sharpe mapped to a Z-score.</li>
                 <li><strong>Price Extension (50d Froth):</strong> Price extension vs 50-day moving average (identifies excessive derivatives greed).</li>
-                <li><strong>Miner Capitulation (Hash Ribbons):</strong> 30d vs 60d Hash Rate. Unprofitable miner capitulation marks generational bottoms.</li>
-                <li><strong>Network Adoption (NVT):</strong> Market Cap divided by On-chain USD Transaction Volume (Bitcoin's P/E ratio).</li>
+                <li><strong>Hoagie Net Liquidity Impulse:</strong> 90-day momentum of Net Fed Liquidity (WALCL − TGA − RRP + Facilities).</li>
               </ul>
               <code style={{ color: '#79c0ff', display: 'block', marginTop: '4px', fontSize: '11.5px' }}>Composite Risk % = clamp(50 - (Composite_Z / 3) × 50, 0, 100)</code>
             </div>
