@@ -14,6 +14,7 @@ FRED_START_DATE = '2022-01-01'
 TODAY = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
 
 ONE_DAY_MS = 86400000
+RAQQR_MU = 7.9914
 RAQQR_GENESIS_MS = int(datetime.datetime(2009, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
 RAQQR_KEYS = ["0.01", "0.1", "0.25", "0.5", "0.75", "0.95", "0.99"]
 RAQQR_COEF = {
@@ -211,7 +212,6 @@ def build_btc_strategist_data(full_macro_df):
     sorted_ms = sorted(btc_map.keys())
     closes = np.array([btc_map[ms] for ms in sorted_ms], dtype=float)
 
-    # 1. Walk-Forward Power Law & Static Power Law
     x_days = np.array([max(1, (m - RAQQR_GENESIS_MS)/ONE_DAY_MS) for m in sorted_ms])
     x_log = np.log(x_days)
     y_log = np.log10(closes)
@@ -232,14 +232,12 @@ def build_btc_strategist_data(full_macro_df):
             today_pred = np.polyval(p, x_log[i])
             q_wf_out[i, :] = 10**(today_pred + pcts)
 
-    # 2. Extract Price Froth
     sma_50 = pd.Series(closes).rolling(50, min_periods=10).mean().values
     froth_raw = np.log(closes / np.maximum(1e-8, sma_50))
     med_f = np.nanmedian(froth_raw)
     mad_f = np.nanmedian(np.abs(froth_raw - med_f)) or 1.0
     zf_arr = np.clip(-(froth_raw - med_f) / (1.4826 * mad_f), -3.0, 3.0)
 
-    # 3. Hoagie Net Liquidity Impulse (zl)
     liq_z_by_date = {}
     if full_macro_df is not None and 'Net_Liquidity' in full_macro_df.columns:
         liq_s = full_macro_df['Net_Liquidity'].dropna()
@@ -251,7 +249,6 @@ def build_btc_strategist_data(full_macro_df):
             for dt_idx, val in liq_z_series.items():
                 liq_z_by_date[dt_idx.strftime('%Y-%m-%d')] = float(val)
 
-    # 4. Post-Seed Proxies for CBPL/Onchain/Sharpe
     log_ret = np.diff(np.log(closes), prepend=np.log(closes[0]))
     ret_s = pd.Series(log_ret)
     roll_sharpe = (ret_s.rolling(365, min_periods=30).mean() / ret_s.rolling(365, min_periods=30).std().replace(0, np.nan)).fillna(0)
@@ -281,7 +278,6 @@ def build_btc_strategist_data(full_macro_df):
         price = closes[i]
         dt_str = datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).strftime('%Y-%m-%d')
         
-        # Forward-fill liquidity over weekends/holidays
         if dt_str in liq_z_by_date:
             last_liq_z = liq_z_by_date[dt_str]
 
@@ -311,14 +307,12 @@ def build_btc_strategist_data(full_macro_df):
     }
     with open('public/btc_data.json', 'w', encoding='utf-8') as f:
         json.dump(out_payload, f, separators=(',', ':'))
-    print(f"Saved {len(records)} daily BTC records to public/btc_data.json.")
 
 def main():
     tga_df = fetch_treasury_tga()
     fred_df = fetch_fred_data()
 
     if fred_df.empty:
-        print("CRITICAL: No FRED data found at all. Exiting.")
         sys.exit(1)
 
     if not tga_df.empty:
@@ -326,7 +320,6 @@ def main():
         merged_df = merged_df.resample('D').mean()
         merged_df['Final_TGA'] = merged_df['TGA_Daily'].ffill()
     else:
-        print("WARNING: Using Weekly TGA (FRED) as fallback.")
         merged_df = fred_df.resample('D').mean()
         merged_df['Final_TGA'] = (merged_df['TGA_Weekly'] * 1000).ffill()
 
@@ -373,7 +366,6 @@ def main():
 
     output_df = output_df.rename(columns={'Final_TGA': 'TGA_Daily'})
     output_df.to_json('public/data.json', orient='records')
-    print("Done! Macro Data updated.")
 
 if __name__ == "__main__":
     main()
